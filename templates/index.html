@@ -81,7 +81,12 @@
             <input type="text" name="api_token" id="api_token" value="{{ api_token }}" required>
     
             <label for="zones"><strong>Zones (JSON format):</strong><br>
-                <small>Example: {"example.com": "zone-id"}</small></label>
+                <small>
+                  Example:<br>
+                  Single zone: <code>{"example.com": "zone-id"}</code><br>
+                  Multiple zones: <code>{"example.com": "zone-id-1", "another.com": "zone-id-2"}</code>
+                </small>
+              </label>              
             <textarea id="zones" name="zones" rows="4" required>{{ zones }}</textarea>
     
             <label for="refresh"><strong>Dashboard Refresh Interval (sec):</strong></label>
