@@ -1,7 +1,7 @@
 from flask import render_template, request, redirect, url_for
 from config import load_config, save_config, get_public_ip
 from cloudflare_api import get_dns_record, get_zone_id, update_dns_record
-from logger import log
+from logger import log, read_recent_logs
 import requests
 import json
 
@@ -32,8 +32,8 @@ def register_routes(app):
             if r.ok:
                 existing_records.extend(r.json().get("result", []))
 
-        with open("ddns.log", "r", encoding="utf-8") as f:
-            logs = f.read().splitlines()[-20:]
+        logs = read_recent_logs()
+
 
         return render_template("index.html",
             current_ip=current_ip,
