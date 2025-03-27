@@ -1,10 +1,10 @@
 from flask import render_template, request, redirect, url_for
-from config import load_config, save_config, get_public_ip
+from config import load_config, save_config, get_public_ip, get_ui_state
 from cloudflare_api import get_dns_record, get_zone_id, update_dns_record
 from logger import log, read_recent_logs
-from config import get_ui_state
 import requests
 import json
+from datetime import datetime  # 👈 Needed for timestamp fallback
 
 def register_routes(app):
     @app.route("/")
@@ -42,7 +42,6 @@ def register_routes(app):
             else:
                 health_icon = "✅"
 
-
             record_data.append({
                 "name": record,
                 "dns_ip": dns["content"] if dns else "Not Found",
@@ -54,7 +53,6 @@ def register_routes(app):
                 "last_checked": last_checked,
                 "last_updated": last_updated,
             })
-
 
         existing_records = []
         headers = {
@@ -72,6 +70,24 @@ def register_routes(app):
         config_logs = log_sections["config_logs"]
         api_logs = log_sections["api_logs"]
 
+        recent_checks = [
+            stat.get("last_checked")
+            for stat in stats.values()
+            if "last_checked" in stat
+        ]
+        from datetime import datetime
+
+        try:
+            last_dt = max(
+             [datetime.fromisoformat(t) for t in recent_checks if t],
+             default=datetime.utcnow()
+            )
+        except Exception:
+            last_dt = datetime.utcnow()
+
+        last_background_check = last_dt.replace(microsecond=0).isoformat() + "Z"
+
+
         return render_template("index.html",
             current_ip=current_ip,
             records=record_data,
@@ -82,9 +98,9 @@ def register_routes(app):
             interval=interval,
             logs=config_logs,
             api_logs=api_logs,
-            ui_state=get_ui_state() 
+            ui_state=get_ui_state(),
+            last_background_check=last_background_check
         )
-
 
     @app.route("/update-config", methods=["POST"])
     def update_config():

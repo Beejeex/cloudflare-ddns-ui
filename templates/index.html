@@ -69,7 +69,8 @@
 <body>
     <h2>Cloudflare DDNS Dashboard</h2>
     <p><strong>Current Public IP:</strong> {{ current_ip }}</p>
-
+    <p>⏳ Next background check in: <span id="countdown-timer">calculating...</span></p>    
+  
     <details id="settings-section" {% if ui_state.settings %}open{% endif %}>
         <summary style="cursor:pointer; font-weight:bold;">Cloudflare Settings</summary>
         <form action="/update-config" method="post" style="margin-top: 10px;">
@@ -239,16 +240,32 @@
           })
         });
       }
-
+    
       ["settings-section", "zone-section", "logs-section"].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.addEventListener("toggle", saveSectionStates);
       });
-
+    
+      // Auto-refresh
       const refreshInSeconds = {{ refresh }};
       setTimeout(() => {
         window.location.reload();
       }, refreshInSeconds * 1000);
+    
+      // Countdown to next background check
+      const intervalSeconds = {{ interval }};
+      const lastCheck = new Date("{{ last_background_check }}");
+      const targetTime = new Date(lastCheck.getTime() + intervalSeconds * 1000);
+
+      function updateCountdown() {
+        const now = new Date();
+        const diff = Math.max(0, Math.floor((targetTime - now) / 1000));
+        document.getElementById("countdown-timer").innerText = diff + " seconds";
+      }
+
+      setInterval(updateCountdown, 1000);
+      updateCountdown(); 
     </script>
+    
 </body>
 </html>
