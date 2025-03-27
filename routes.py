@@ -11,13 +11,43 @@ def register_routes(app):
         config = load_config()
         current_ip = get_public_ip()
         interval = config.get("interval", 300)
+
         record_data = []
+
+        # Load stats from file
+        stats = {}
+        try:
+            with open("logs/record_stats.json") as f:
+                stats = json.load(f)
+        except Exception:
+            pass
+
         for record in config.get("records", []):
             dns = get_dns_record(config, record)
+            stat = stats.get(record, {})
+            last_checked = stat.get("last_checked")
+            last_updated = stat.get("last_updated")
+            updates = stat.get("updates", 0)
+            failures = stat.get("failures", 0)
+
+            if failures >= 3:
+                health = "❌"
+            elif failures > 0:
+                health = "⚠️"
+            else:
+                health = "✅"
+
+            is_up_to_date = dns and dns["content"] == current_ip
+            status_text = f"{health} Up-to-date" if is_up_to_date else f"{health} Needs update"
+
             record_data.append({
                 "name": record,
                 "dns_ip": dns["content"] if dns else "Not Found",
-                "status": "✅ Up-to-date" if dns and dns["content"] == current_ip else "⚠️ Needs Update"
+                "status": status_text,
+                "updates": updates,
+                "failures": failures,
+                "last_checked": last_checked,
+                "last_updated": last_updated,
             })
 
         existing_records = []
@@ -32,8 +62,9 @@ def register_routes(app):
             if r.ok:
                 existing_records.extend(r.json().get("result", []))
 
-        logs = read_recent_logs()
-
+        log_sections = read_recent_logs()
+        config_logs = log_sections["config_logs"]
+        api_logs = log_sections["api_logs"]
 
         return render_template("index.html",
             current_ip=current_ip,
@@ -43,8 +74,10 @@ def register_routes(app):
             zones=json.dumps(config.get("zones", {})),
             refresh=config.get("refresh", 30),
             interval=interval,
-            logs=logs
+            logs=config_logs,
+            api_logs=api_logs
         )
+
 
     @app.route("/update-config", methods=["POST"])
     def update_config():
