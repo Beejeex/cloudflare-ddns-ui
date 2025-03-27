@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta http-equiv="refresh" content="{{ refresh }}">
+    <!-- Removed meta refresh -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Cloudflare DDNS Dashboard</title>
     <style>
@@ -70,62 +70,62 @@
     <h2>Cloudflare DDNS Dashboard</h2>
     <p><strong>Current Public IP:</strong> {{ current_ip }}</p>
 
-    <div style="max-width: 2000px; margin: 0 auto;">
-        <h3>Cloudflare Settings</h3>
-        <form action="/update-config" method="post">
+    <details id="settings-section" {% if ui_state.settings %}open{% endif %}>
+        <summary style="cursor:pointer; font-weight:bold;">Cloudflare Settings</summary>
+        <form action="/update-config" method="post" style="margin-top: 10px;">
             <label for="interval"><strong>Background Update Interval (sec):</strong><br>
                 <small>How often DNS records are checked and updated in the background.</small></label>
             <input type="number" name="interval" value="{{ interval }}" min="30">
-    
+
             <label for="api_token"><strong>API Token:</strong></label>
             <input type="text" name="api_token" id="api_token" value="{{ api_token }}" required>
-    
+
             <label for="zones"><strong>Zones (JSON format):</strong><br>
                 <small>
                   Example:<br>
                   Single zone: <code>{"example.com": "zone-id"}</code><br>
                   Multiple zones: <code>{"example.com": "zone-id-1", "another.com": "zone-id-2"}</code>
                 </small>
-              </label>              
+              </label>
             <textarea id="zones" name="zones" rows="4" required>{{ zones }}</textarea>
-    
+
             <label for="refresh"><strong>Dashboard Refresh Interval (sec):</strong></label>
             <input type="number" name="refresh" value="{{ refresh }}" min="5">
-    
+
             <button type="submit">💾 Save Settings</button>
         </form>
-    
+
         <form action="/clear-logs" method="post" style="margin-top: 10px;">
             <button type="submit">🧽 Clear Logs</button>
         </form>
-    </div>
-    
+    </details>
 
     <h3>DNS Records (Managed)</h3>
     <ul style="list-style: none; padding-left: 0;">
       {% for record in records %}
       <li style="margin-bottom: 16px; padding: 12px; background-color: #f0f8f5; border-radius: 6px; border: 1px solid #cce5d8; font-size: 14px;">
-    
+
         <!-- Real-Time Check -->
         <div style="margin-bottom: 4px; color: #444;">
           <div style="font-weight: 600; color: #333;">🌐 Real-time check (UI):</div>
           <div style="margin-left: 10px;">
             <span style="font-weight: bold; color: green;">📌 {{ record.name }}</span> &nbsp;
             🖥️ {{ record.dns_ip }} &nbsp;
-            {{ record.status }}
+            {{ record.status_icon }} {{ record.status_label }}
           </div>
         </div>
-    
+
         <!-- Background Routine -->
         <div style="margin-bottom: 8px; color: #444;">
           <div style="font-weight: 600; color: #333;">⚙️ Background check (updater):</div>
           <div style="margin-left: 10px;">
-            ⏱️ Checked: {{ record.last_checked or 'N/A' }} &nbsp;
+            {{ record.health_icon }} ⏱️ Checked: {{ record.last_checked or 'N/A' }} &nbsp;
             🛠️ Updated: {{ record.last_updated or 'N/A' }} &nbsp;
             📊 {{ record.updates }}↑ / {{ record.failures }}×
           </div>
         </div>
-    
+
+
         <!-- Action Buttons -->
         <div style="display: flex; gap: 8px; margin-top: 4px;">
           <form action="/update" method="post" class="inline">
@@ -137,96 +137,118 @@
             <button type="submit">Remove from Managed</button>
           </form>
         </div>
-    
+
       </li>
       {% endfor %}
     </ul>
-     
+
     <h3>Add Record</h3>
     <form action="/create-managed" method="post">
         <input name="record_name" placeholder="your.domain.com" required>
         <button type="submit">Create & Manage</button>
     </form>
 
-    <h3>DNS Records (All in Zone)</h3>
-    <table border="1" cellpadding="5" cellspacing="0">
-        <tr><th>Name</th><th>Content</th><th>TTL</th><th>Proxied</th><th>Type</th><th>Actions</th></tr>
-        {% for r in all_records %}
-        <tr {% if r.name in records|map(attribute='name') %}style="background-color:#ddffdd"{% else %}style="background-color:#ffeeee"{% endif %}>
-            <td>{{ r.name }}</td>
-            <td>{{ r.content }}</td>
-            <td>{{ r.ttl }}</td>
-            <td>{{ r.proxied }}</td>
-            <td>{{ r.type }}</td>
-            <td>
-                {% if r.name not in records|map(attribute='name') %}
-                <form action="/add-to-managed" method="post" class="inline">
-                    <input type="hidden" name="record_name" value="{{ r.name }}">
-                    <button type="submit">➕ Add to Managed Records</button>
-                </form>
-                {% endif %}
-                <form action="/delete-record" method="post" class="inline">
-                    <input type="hidden" name="record_id" value="{{ r.id }}">
-                    <input type="hidden" name="record_name" value="{{ r.name }}">
-                    <button type="submit">🗑 Delete Record</button>
-                </form>
-            </td>
-        </tr>
-        {% endfor %}
-    </table>
+    <details id="zone-section" {% if ui_state.all_records %}open{% endif %}>
+        <summary style="cursor:pointer; font-weight:bold;">DNS Records (All in Zone)</summary>
+        <table border="1" cellpadding="5" cellspacing="0" style="margin-top: 10px;">
+            <tr><th>Name</th><th>Content</th><th>TTL</th><th>Proxied</th><th>Type</th><th>Actions</th></tr>
+            {% for r in all_records %}
+            <tr {% if r.name in records|map(attribute='name') %}style="background-color:#ddffdd"{% else %}style="background-color:#ffeeee"{% endif %}>
+                <td>{{ r.name }}</td>
+                <td>{{ r.content }}</td>
+                <td>{{ r.ttl }}</td>
+                <td>{{ r.proxied }}</td>
+                <td>{{ r.type }}</td>
+                <td>
+                    {% if r.name not in records|map(attribute='name') %}
+                    <form action="/add-to-managed" method="post" class="inline">
+                        <input type="hidden" name="record_name" value="{{ r.name }}">
+                        <button type="submit">➕ Add to Managed Records</button>
+                    </form>
+                    {% endif %}
+                    <form action="/delete-record" method="post" class="inline">
+                        <input type="hidden" name="record_id" value="{{ r.id }}">
+                        <input type="hidden" name="record_name" value="{{ r.name }}">
+                        <button type="submit">🗑 Delete Record</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </table>
+    </details>
 
     <h3>Logs</h3>
-
-<!-- Config/System Logs -->
-<details>
-  <summary style="cursor:pointer; font-weight:bold;">Config & System Logs</summary>
-  <table style="width:100%; border-collapse:collapse; margin-top: 8px;">
-    <tr>
-      <th style="border:1px solid #ccc; padding:4px;">Timestamp</th>
-      <th style="border:1px solid #ccc; padding:4px;">Message</th>
-    </tr>
-    {% for entry in logs %}
-      <tr style="line-height: 1.2;">
-        <td style="border:1px solid #ccc; padding:4px; vertical-align:top;">{{ entry.timestamp }}</td>
-        <td style="border:1px solid #ccc; padding:4px; vertical-align:top;">
-          <pre style="margin: 0; font-family: monospace; white-space: pre-wrap; line-height: 1.2;">{{ entry.message.strip() }}</pre>
-        </td>
-      </tr>
-    {% endfor %}
-  </table>
-</details>
-
-<!-- API Logs Grouped by Record -->
-<details style="margin-top: 20px;">
-    <summary style="cursor:pointer; font-weight:bold;">API Logs (per record)</summary>
-    {% for record, pair in api_logs.items() %}
-      <h4 style="margin-bottom: 4px;">{{ record }}</h4>
-      <table style="width:100%; border-collapse:collapse; margin-bottom: 12px;">
+    <details id="logs-section" {% if ui_state.logs %}open{% endif %}>
+      <summary style="cursor:pointer; font-weight:bold;">Config & System Logs</summary>
+      <table style="width:100%; border-collapse:collapse; margin-top: 8px;">
         <tr>
-          <th style="border:1px solid #ccc; padding:4px;">Type</th>
           <th style="border:1px solid #ccc; padding:4px;">Timestamp</th>
           <th style="border:1px solid #ccc; padding:4px;">Message</th>
         </tr>
-        <tr>
-          <td style="border:1px solid #ccc; padding:4px; vertical-align:top;">GET</td>
-          <td style="border:1px solid #ccc; padding:4px; vertical-align:top;">{{ pair["get"].timestamp }}</td>
-          <td style="border:1px solid #ccc; padding:4px; vertical-align:top;">
-            <pre style="margin: 0; font-family: monospace; white-space: pre-wrap;">{{ pair["get"].message.strip() }}</pre>
-          </td>
-        </tr>
-        <tr>
-          <td style="border:1px solid #ccc; padding:4px; vertical-align:top;">Response</td>
-          <td style="border:1px solid #ccc; padding:4px; vertical-align:top;">{{ pair["response"].timestamp }}</td>
-          <td style="border:1px solid #ccc; padding:4px; vertical-align:top;">
-            <details>
-              <summary><strong>[API Response {{ pair["response"].status_code }}]</strong></summary>
-              <pre style="margin: 0; font-family: monospace; white-space: pre-wrap;">{{ pair["response"].message.strip() }}</pre>
-            </details>
-          </td>
-        </tr>
+        {% for entry in logs %}
+          <tr style="line-height: 1.2;">
+            <td style="border:1px solid #ccc; padding:4px; vertical-align:top;">{{ entry.timestamp }}</td>
+            <td style="border:1px solid #ccc; padding:4px; vertical-align:top;">
+              <pre style="margin: 0; font-family: monospace; white-space: pre-wrap; line-height: 1.2;">{{ entry.message.strip() }}</pre>
+            </td>
+          </tr>
+        {% endfor %}
       </table>
-    {% endfor %}
-  </details>
-    
+    </details>
+
+    <details style="margin-top: 20px;">
+      <summary style="cursor:pointer; font-weight:bold;">API Logs (per record)</summary>
+      {% for record, pair in api_logs.items() %}
+        <h4 style="margin-bottom: 4px;">{{ record }}</h4>
+        <table style="width:100%; border-collapse:collapse; margin-bottom: 12px;">
+          <tr>
+            <th style="border:1px solid #ccc; padding:4px;">Type</th>
+            <th style="border:1px solid #ccc; padding:4px;">Timestamp</th>
+            <th style="border:1px solid #ccc; padding:4px;">Message</th>
+          </tr>
+          <tr>
+            <td style="border:1px solid #ccc; padding:4px; vertical-align:top;">GET</td>
+            <td style="border:1px solid #ccc; padding:4px; vertical-align:top;">{{ pair["get"].timestamp }}</td>
+            <td style="border:1px solid #ccc; padding:4px; vertical-align:top;">
+              <pre style="margin: 0; font-family: monospace; white-space: pre-wrap;">{{ pair["get"].message.strip() }}</pre>
+            </td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #ccc; padding:4px; vertical-align:top;">Response</td>
+            <td style="border:1px solid #ccc; padding:4px; vertical-align:top;">{{ pair["response"].timestamp }}</td>
+            <td style="border:1px solid #ccc; padding:4px; vertical-align:top;">
+              <details>
+                <summary><strong>[API Response {{ pair["response"].status_code }}]</strong></summary>
+                <pre style="margin: 0; font-family: monospace; white-space: pre-wrap;">{{ pair["response"].message.strip() }}</pre>
+              </details>
+            </td>
+          </tr>
+        </table>
+      {% endfor %}
+    </details>
+
+    <script>
+      function saveSectionStates() {
+        fetch('/update-ui-state', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            settings: document.getElementById("settings-section").open,
+            all_records: document.getElementById("zone-section").open,
+            logs: document.getElementById("logs-section")?.open ?? true
+          })
+        });
+      }
+
+      ["settings-section", "zone-section", "logs-section"].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener("toggle", saveSectionStates);
+      });
+
+      const refreshInSeconds = {{ refresh }};
+      setTimeout(() => {
+        window.location.reload();
+      }, refreshInSeconds * 1000);
+    </script>
 </body>
 </html>

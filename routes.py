@@ -2,6 +2,7 @@ from flask import render_template, request, redirect, url_for
 from config import load_config, save_config, get_public_ip
 from cloudflare_api import get_dns_record, get_zone_id, update_dns_record
 from logger import log, read_recent_logs
+from config import get_ui_state
 import requests
 import json
 
@@ -30,29 +31,34 @@ def register_routes(app):
             updates = stat.get("updates", 0)
             failures = stat.get("failures", 0)
 
-            if failures >= 3:
-                health = "❌"
-            elif failures > 0:
-                health = "⚠️"
-            else:
-                health = "✅"
-
             is_up_to_date = dns and dns["content"] == current_ip
-            status_text = f"{health} Up-to-date" if is_up_to_date else f"{health} Needs update"
+            status_icon = "✅" if is_up_to_date else "⚠️"
+            status_label = "Up-to-date" if is_up_to_date else "Needs update"
+
+            if failures >= 3:
+                health_icon = "❌"
+            elif failures > 0:
+                health_icon = "⚠️"
+            else:
+                health_icon = "✅"
+
 
             record_data.append({
                 "name": record,
                 "dns_ip": dns["content"] if dns else "Not Found",
-                "status": status_text,
+                "status_icon": status_icon,
+                "status_label": status_label,
+                "health_icon": health_icon,
                 "updates": updates,
                 "failures": failures,
                 "last_checked": last_checked,
                 "last_updated": last_updated,
             })
 
+
         existing_records = []
         headers = {
-            "Authorization": f"Bearer {config['api_token']}",
+            "Authorization": f"Bearer {config.get('api_token', '')}",
             "Content-Type": "application/json"
         }
         for domain, zone_id in config.get("zones", {}).items():
@@ -75,7 +81,8 @@ def register_routes(app):
             refresh=config.get("refresh", 30),
             interval=interval,
             logs=config_logs,
-            api_logs=api_logs
+            api_logs=api_logs,
+            ui_state=get_ui_state() 
         )
 
 
@@ -204,3 +211,10 @@ def register_routes(app):
             else:
                 log(f"❌ Manual update failed for {record_name}: {response}")
         return redirect(url_for("index"))
+
+    @app.route("/update-ui-state", methods=["POST"])
+    def update_ui_state():
+        from config import set_ui_state
+        state = request.json
+        set_ui_state(state)
+        return "ok", 200
