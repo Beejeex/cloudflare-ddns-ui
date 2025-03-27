@@ -79,13 +79,13 @@ def register_routes(app):
 
         try:
             last_dt = max(
-             [datetime.fromisoformat(t) for t in recent_checks if t],
-             default=datetime.utcnow()
+                [datetime.fromisoformat(t) for t in recent_checks if t],
+                default=datetime.utcnow()
             )
         except Exception:
             last_dt = datetime.utcnow()
 
-        last_background_check = last_dt.replace(microsecond=0).isoformat() + "Z"
+        last_background_check = int(last_dt.timestamp())
 
 
         return render_template("index.html",

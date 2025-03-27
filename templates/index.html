@@ -254,7 +254,7 @@
     
       // Countdown to next background check
       const intervalSeconds = {{ interval }};
-      const lastCheck = new Date("{{ last_background_check }}");
+      const lastCheck = new Date({{ last_background_check }} * 1000);
       const targetTime = new Date(lastCheck.getTime() + intervalSeconds * 1000);
 
       function updateCountdown() {
