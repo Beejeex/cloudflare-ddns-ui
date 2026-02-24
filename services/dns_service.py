@@ -141,12 +141,18 @@ class DnsService:
             A flat list of DnsRecord instances from all configured zones.
         """
         all_records: list[DnsRecord] = []
+        errors: list[str] = []
         for zone_id in zones.values():
             try:
                 records = await self._provider.list_records(zone_id)
                 all_records.extend(records)
             except DnsProviderError as exc:
                 logger.warning("Could not list records for zone %s: %s", zone_id, exc)
+                errors.append(str(exc))
+
+        # NOTE: Re-raise if every zone failed so callers can surface the error.
+        if errors and not all_records:
+            raise DnsProviderError(errors[0])
         return all_records
 
     async def delete_dns_record(
