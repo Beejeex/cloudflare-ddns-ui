@@ -66,6 +66,11 @@ async def dashboard(
     except IpFetchError as exc:
         logger.warning("Could not fetch public IP for dashboard: %s", exc)
 
+    # Detect not-yet-configured state before hitting the API
+    api_error: str | None = None
+    if not config.api_token or not zones:
+        api_error = "No API token or zones configured. Go to Settings to set them up."
+
     # Build per-record display data
     record_data = []
     for record_name in managed_records:
@@ -74,6 +79,8 @@ async def dashboard(
             dns_record = await dns_service.check_single_record(record_name, zones)
         except DnsProviderError as exc:
             logger.warning("Could not fetch DNS record %s: %s", record_name, exc)
+            if not api_error:
+                api_error = str(exc)
 
         stats = await stats_service.get_for_record(record_name)
         dns_ip = dns_record.content if dns_record else "Not Found"
@@ -95,6 +102,8 @@ async def dashboard(
         all_records = await dns_service.list_zone_records(zones)
     except DnsProviderError as exc:
         logger.warning("Could not list zone records for dashboard: %s", exc)
+        if not api_error:
+            api_error = str(exc)
 
     return templates.TemplateResponse(
         request,
@@ -104,6 +113,7 @@ async def dashboard(
             "records": record_data,
             "all_records": all_records,
             "interval": config.interval,
+            "api_error": api_error,
         },
     )
 
