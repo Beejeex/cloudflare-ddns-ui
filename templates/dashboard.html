@@ -30,9 +30,13 @@
     <div class="stat-label">Next Check In</div>
     <div class="stat-value" id="next-check-countdown" style="font-size:1.5rem; color:#0284c7;">&mdash;</div>
   </div>
+  <div class="stat-card">
+    <div class="stat-label">Public IP</div>
+    <div class="stat-value" style="font-size:1.1rem; font-family:monospace;">{{ current_ip }}</div>
+  </div>
 </div>
 
-{# API / auth error banner #}
+{# ---- Cloudflare API error banner ---- #}
 {% if api_error %}
 <div class="alert" style="background:#fef3c7; color:#92400e; border:1px solid #fde68a; display:flex; align-items:center; gap:0.75rem; margin-bottom:1rem;">
   <span style="font-size:1.125rem;">&#9888;</span>
@@ -45,13 +49,34 @@
 </div>
 {% endif %}
 
+{# ---- UniFi API error banner ---- #}
+{% if unifi_error %}
+<div class="alert" style="background:#fef3c7; color:#92400e; border:1px solid #fde68a; display:flex; align-items:center; gap:0.75rem; margin-bottom:1rem;">
+  <span style="font-size:1.125rem;">&#9888;</span>
+  <div>
+    <strong>UniFi API error</strong> &mdash; {{ unifi_error }}
+    <span style="margin-left:0.5rem;">
+      <a href="/settings" style="color:#0284c7; font-weight:600;">Go to Settings &rarr;</a>
+    </span>
+  </div>
+</div>
+{% endif %}
+
 {# -------------------------------------------------------------------------
-   Managed records table — full width
+   Managed records — Cloudflare + UniFi unified table
 ------------------------------------------------------------------------- #}
 <div class="card mb-2">
   <div class="card-header">
     <span class="card-title">Managed DNS Records</span>
-    <span class="htmx-indicator text-xs text-muted">updating…</span>
+    <div style="display:flex; align-items:center; gap:0.75rem;">
+      {% if unifi_enabled %}
+      <span style="display:inline-flex; align-items:center; gap:0.35rem; font-size:0.75rem; color:#64748b;">
+        <span style="width:8px; height:8px; border-radius:50%; background:#0284c7; display:inline-block;"></span>
+        UniFi active
+      </span>
+      {% endif %}
+      <span class="htmx-indicator text-xs text-muted">updating…</span>
+    </div>
   </div>
 
   <div id="records-container">
@@ -93,92 +118,19 @@
 {# -------------------------------------------------------------------------
    Kubernetes Ingress Records — auto-discovered hostnames from cluster
 ------------------------------------------------------------------------- #}
-{% if k8s_records is defined and (k8s_records or k8s_error) %}
+{% if k8s_records is defined %}
 <div class="card mb-2">
   <div class="card-header">
     <span class="card-title">Cluster Ingress Records</span>
-    <span style="font-size:0.75rem; color:#64748b;">Auto-discovered from Kubernetes</span>
+    <span style="font-size:0.75rem; color:#64748b;">
+      {{ k8s_records | length }} hostname{{ 's' if k8s_records | length != 1 else '' }} discovered
+    </span>
   </div>
   <div class="card-body">
     {% include "partials/k8s_records_table.html" %}
   </div>
 </div>
 {% endif %}
-
-{# -------------------------------------------------------------------------
-   All zone A-records — add to managed
-------------------------------------------------------------------------- #}
-<div class="card mb-2">
-  <div class="card-header">
-    <span class="card-title">All A-Records in Zone</span>
-  </div>
-  <div class="card-body">
-    {% if all_records %}
-    <table>
-      <thead>
-        <tr>
-          <th>Name</th>
-          <th>IP</th>
-          <th>TTL</th>
-          <th>Proxied</th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody>
-        {% set managed_names = records | map(attribute='name') | list %}
-        {% for r in all_records %}
-        <tr>
-          <td class="font-mono text-sm">{{ r.name }}</td>
-          <td class="font-mono text-sm">{{ r.content }}</td>
-          <td class="text-muted text-sm">{{ r.ttl }}</td>
-          <td>
-            {% if r.proxied %}
-              <span class="badge badge-warning">Proxied</span>
-            {% else %}
-              <span class="badge badge-neutral">DNS only</span>
-            {% endif %}
-          </td>
-          <td>
-            <div class="flex gap-2">
-              {% if r.name not in managed_names %}
-              <form hx-post="/add-to-managed"
-                    hx-target="#records-container"
-                    hx-swap="innerHTML"
-                    hx-on:htmx:after-request="if(event.detail.successful) location.reload()"
-                    style="display:inline">
-                <input type="hidden" name="record_name" value="{{ r.name }}">
-                <button type="submit" class="btn btn-primary btn-sm">+ Manage</button>
-              </form>
-              {% else %}
-              <span class="badge badge-ok">Managed</span>
-              {% endif %}
-              <form hx-post="/delete-record"
-                    hx-target="#records-container"
-                    hx-swap="innerHTML"
-                    hx-confirm="Delete {{ r.name }} from Cloudflare? This cannot be undone."
-                    hx-on:htmx:after-request="if(event.detail.successful) location.reload()"
-                    style="display:inline">
-                <input type="hidden" name="record_id" value="{{ r.id }}">
-                <input type="hidden" name="record_name" value="{{ r.name }}">
-                <button type="submit" class="btn btn-danger btn-sm">Delete</button>
-              </form>
-            </div>
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-    {% else %}
-    <p class="text-muted text-sm">
-      {% if api_error %}
-        Could not load records — check the API error above.
-      {% else %}
-        No A-records found. Configure your API token and zones in Settings first.
-      {% endif %}
-    </p>
-    {% endif %}
-  </div>
-</div>
 
 {% endblock %}
 

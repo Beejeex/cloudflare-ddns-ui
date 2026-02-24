@@ -85,6 +85,21 @@ def _run_migrations() -> None:
                 "ALTER TABLE appconfig ADD COLUMN k8s_enabled INTEGER NOT NULL DEFAULT 0"
             )
             logger.info("Migration: added 'k8s_enabled' column to appconfig table.")
+        if "unifi_api_key" not in existing:
+            conn.exec_driver_sql(
+                "ALTER TABLE appconfig ADD COLUMN unifi_api_key TEXT NOT NULL DEFAULT ''"
+            )
+            logger.info("Migration: added 'unifi_api_key' column to appconfig table.")
+        if "unifi_site_id" not in existing:
+            conn.exec_driver_sql(
+                "ALTER TABLE appconfig ADD COLUMN unifi_site_id TEXT NOT NULL DEFAULT ''"
+            )
+            logger.info("Migration: added 'unifi_site_id' column to appconfig table.")
+        if "unifi_enabled" not in existing:
+            conn.exec_driver_sql(
+                "ALTER TABLE appconfig ADD COLUMN unifi_enabled INTEGER NOT NULL DEFAULT 0"
+            )
+            logger.info("Migration: added 'unifi_enabled' column to appconfig table.")
 
 
 def get_session() -> Generator[Session, None, None]:

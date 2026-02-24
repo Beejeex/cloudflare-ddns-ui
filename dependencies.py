@@ -14,6 +14,7 @@ from sqlmodel import Session
 
 from cloudflare.cloudflare_client import CloudflareClient
 from cloudflare.dns_provider import DNSProvider
+from cloudflare.unifi_client import UnifiClient
 from db.database import get_session
 from repositories.config_repository import ConfigRepository
 from repositories.stats_repository import StatsRepository
@@ -202,3 +203,24 @@ async def get_kubernetes_service(
     """
     k8s_enabled = await config_service.get_k8s_enabled()
     return KubernetesService(enabled=k8s_enabled)
+
+
+async def get_unifi_client(
+    config_service: ConfigService = Depends(get_config_service),
+    http_client: httpx.AsyncClient = Depends(get_http_client),
+) -> UnifiClient:
+    """
+    Provides a UnifiClient initialised with the current API key.
+
+    The client's is_configured() returns False when no key is set,
+    allowing callers to skip UniFi calls gracefully.
+
+    Args:
+        config_service: Provides the UniFi config from the DB.
+        http_client: The application-level httpx.AsyncClient.
+
+    Returns:
+        A UnifiClient instance.
+    """
+    api_key, _, _ = await config_service.get_unifi_config()
+    return UnifiClient(http_client=http_client, api_key=api_key)

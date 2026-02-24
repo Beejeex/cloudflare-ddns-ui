@@ -48,12 +48,15 @@ async def update_config(
     refresh: int = Form(30),
     interval: int = Form(300),
     k8s_enabled: bool = Form(False),
+    unifi_api_key: str = Form(""),
+    unifi_site_id: str = Form(""),
+    unifi_enabled: bool = Form(False),
     config_service: ConfigService = Depends(get_config_service),
     log_service: LogService = Depends(get_log_service),
 ) -> HTMLResponse:
     """
-    Saves new Cloudflare credentials, timing configuration, and Kubernetes
-    discovery toggle.
+    Saves new Cloudflare credentials, timing configuration, Kubernetes
+    discovery toggle, and UniFi integration settings.
 
     HTMX swaps the returned fragment into #config-status on the page.
 
@@ -64,6 +67,9 @@ async def update_config(
         refresh: UI auto-refresh interval in seconds.
         interval: Background DDNS check interval in seconds.
         k8s_enabled: Whether Kubernetes Ingress discovery is enabled.
+        unifi_api_key: UniFi Site Manager API key.
+        unifi_site_id: UniFi site UUID.
+        unifi_enabled: Whether UniFi internal DNS management is enabled.
         config_service: Saves the new configuration.
         log_service: Writes a UI log entry on success.
 
@@ -82,6 +88,9 @@ async def update_config(
         refresh=refresh,
         interval=interval,
         k8s_enabled=k8s_enabled,
+        unifi_api_key=unifi_api_key,
+        unifi_site_id=unifi_site_id,
+        unifi_enabled=unifi_enabled,
     )
 
     # Reschedule the background job with the new interval

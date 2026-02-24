@@ -9,8 +9,9 @@
   <thead>
     <tr>
       <th>Record</th>
-      <th>DNS IP</th>
-      <th>Status</th>
+      <th>Cloudflare IP</th>
+      <th>CF Status</th>
+      <th>UniFi IP</th>
       <th>Updates</th>
       <th>Failures</th>
       <th>Last Checked</th>
@@ -29,6 +30,13 @@
           <span class="badge badge-ok">Up to date</span>
         {% else %}
           <span class="badge badge-warning">Needs update</span>
+        {% endif %}
+      </td>
+      <td class="font-mono text-sm">
+        {% if r.unifi_ip %}
+          {{ r.unifi_ip }}
+        {% else %}
+          <span class="text-muted">—</span>
         {% endif %}
       </td>
       <td class="text-sm">{{ r.updates }}</td>
@@ -64,6 +72,6 @@
 
 {% else %}
 <div style="padding: 1.25rem; color: #94a3b8; font-size: 0.875rem;">
-  No records managed yet. Use the "All A-Records in Zone" table to add records.
+  No records managed yet. Use the form below to create and manage records.
 </div>
 {% endif %}

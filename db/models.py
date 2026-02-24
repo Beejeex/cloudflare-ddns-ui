@@ -48,6 +48,15 @@ class AppConfig(SQLModel, table=True):
     # Whether Kubernetes Ingress discovery is enabled (off by default)
     k8s_enabled: bool = Field(default=False)
 
+    # UniFi Site Manager API key (from unifi.ui.com → Settings → API Keys)
+    unifi_api_key: str = Field(default="")
+
+    # UniFi site UUID used as the zone_id for DNS policy calls
+    unifi_site_id: str = Field(default="")
+
+    # Whether UniFi internal DNS management is enabled (off by default)
+    unifi_enabled: bool = Field(default=False)
+
 
 # ---------------------------------------------------------------------------
 # RecordStats — per-DNS-record update/failure counters

@@ -38,3 +38,12 @@ class KubernetesError(Exception):
     Raised by KubernetesService when the cluster cannot be reached,
     authentication fails, or Ingress resources cannot be listed.
     """
+
+
+class UnifiProviderError(DnsProviderError):
+    """
+    Raised by UnifiClient when a UniFi Network DNS Policy API call fails.
+
+    Subclasses DnsProviderError so that callers handling DnsProviderError
+    generically (e.g. DnsService) automatically handle UniFi failures too.
+    """
