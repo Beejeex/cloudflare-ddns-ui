@@ -81,6 +81,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     http_client = httpx.AsyncClient(timeout=10.0)
     app.state.http_client = http_client
 
+    # NOTE: UniFi controllers use self-signed certs so a dedicated client with
+    # verify=False is kept for all UniFi calls rather than disabling SSL globally.
+    unifi_http_client = httpx.AsyncClient(verify=False, timeout=10.0)
+    app.state.unifi_http_client = unifi_http_client
+
     # 3. Scheduler — read initial check interval from DB config
     from db.database import engine
     from repositories.config_repository import ConfigRepository
@@ -117,6 +122,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     observer.stop()
     observer.join(timeout=5)
     await http_client.aclose()
+    await unifi_http_client.aclose()
     logger.info("DDNS Dashboard shut down cleanly.")
 
 

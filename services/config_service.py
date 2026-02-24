@@ -111,15 +111,15 @@ class ConfigService:
         config = self._repo.load()
         return config.k8s_enabled
 
-    async def get_unifi_config(self) -> tuple[str, str, bool]:
+    async def get_unifi_config(self) -> tuple[str, str, str, bool]:
         """
         Returns the UniFi integration configuration.
 
         Returns:
-            A tuple of (api_key, site_id, enabled).
+            A tuple of (host, api_key, site_id, enabled).
         """
         config = self._repo.load()
-        return config.unifi_api_key, config.unifi_site_id, config.unifi_enabled
+        return config.unifi_host, config.unifi_api_key, config.unifi_site_id, config.unifi_enabled
 
     async def get_ui_state(self) -> dict[str, bool]:
         """
@@ -142,6 +142,7 @@ class ConfigService:
         refresh: int,
         interval: int,
         k8s_enabled: bool = False,
+        unifi_host: str = "",
         unifi_api_key: str = "",
         unifi_site_id: str = "",
         unifi_enabled: bool = False,
@@ -156,7 +157,8 @@ class ConfigService:
             refresh: UI auto-refresh interval in seconds.
             interval: Background DDNS check interval in seconds.
             k8s_enabled: Whether Kubernetes Ingress discovery is enabled.
-            unifi_api_key: UniFi Site Manager API key.
+            unifi_host: Hostname or IP of the local UniFi Network Application.
+            unifi_api_key: UniFi API key with DNS write access.
             unifi_site_id: UniFi site UUID used as the DNS policy zone.
             unifi_enabled: Whether UniFi internal DNS management is enabled.
 
@@ -169,6 +171,7 @@ class ConfigService:
         config.refresh = refresh
         config.interval = interval
         config.k8s_enabled = k8s_enabled
+        config.unifi_host = unifi_host
         config.unifi_api_key = unifi_api_key
         config.unifi_site_id = unifi_site_id
         config.unifi_enabled = unifi_enabled

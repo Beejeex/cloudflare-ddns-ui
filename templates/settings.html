@@ -126,13 +126,21 @@ subjects:
         </small>
       </div>
 
+      <div class="form-group" style="margin-top:0.75rem;">
+        <label for="unifi_host">UniFi Controller Host</label>
+        <input type="text" id="unifi_host" name="unifi_host"
+               value="{{ unifi_host }}" autocomplete="off"
+               placeholder="192.168.1.1  or  unifi.local">
+        <small>IP address or hostname of your local UniFi Network Application. SSL is not verified (self-signed cert).</small>
+      </div>
+
       <div style="display:grid; grid-template-columns:1fr 1fr; gap:1rem; margin-top:0.75rem;">
         <div class="form-group" style="margin-bottom:0;">
           <label for="unifi_api_key">UniFi API Key</label>
           <input type="password" id="unifi_api_key" name="unifi_api_key"
                  value="{{ unifi_api_key }}" autocomplete="off"
                  placeholder="Paste your API key here">
-          <small>From unifi.ui.com &rarr; Settings &rarr; API Keys.</small>
+          <small>From your UniFi controller &rarr; Settings &rarr; Admins &amp; Users &rarr; API Keys.</small>
         </div>
         <div class="form-group" style="margin-bottom:0;">
           <label for="unifi_site_id">UniFi Site ID (UUID)</label>

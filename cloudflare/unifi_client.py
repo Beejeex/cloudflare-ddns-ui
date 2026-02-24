@@ -1,8 +1,10 @@
 """
 cloudflare/unifi_client.py
 
-Responsibility: Implements the DNSProvider protocol using the UniFi Site Manager
-REST API (api.ui.com/v1). Manages DNS Policies on a single UniFi site.
+Responsibility: Implements the DNSProvider protocol using the local UniFi Network
+Application REST API (https://{host}/proxy/network/integration/v1). Manages DNS
+Policies on a single UniFi site. SSL verification is disabled because UniFi
+controllers use self-signed certificates.
 Does NOT: read configuration from the database, manage stats, or schedule jobs.
 """
 
@@ -18,7 +20,9 @@ from exceptions import UnifiProviderError
 
 logger = logging.getLogger(__name__)
 
-_UNIFI_BASE = "https://api.ui.com/v1"
+# Path suffix appended to the controller host to reach the integration API.
+# Exported so tests can construct expected URLs without duplicating the string.
+_UNIFI_PATH = "/proxy/network/integration/v1"
 
 # Default TTL for newly created DNS policies (4 hours, same as UniFi default)
 _DEFAULT_TTL = 14400
@@ -46,15 +50,19 @@ class UnifiClient:
         - DNSProvider: this class satisfies the protocol contract
     """
 
-    def __init__(self, http_client: httpx.AsyncClient, api_key: str) -> None:
+    def __init__(self, http_client: httpx.AsyncClient, api_key: str, host: str) -> None:
         """
-        Initialises the client with an HTTP client and a UniFi API key.
+        Initialises the client with an HTTP client, API key, and controller host.
 
         Args:
-            http_client: A long-lived httpx.AsyncClient instance.
-            api_key: A UniFi Site Manager API key (from unifi.ui.com → Settings → API Keys).
+            http_client: A long-lived httpx.AsyncClient instance (must have verify=False).
+            api_key: A UniFi API key with DNS write access.
+            host: Hostname or IP of the local UniFi Network Application,
+                  e.g. "192.168.1.1" or "unifi.local".
         """
         self._client = http_client
+        # Build the base URL once; strip trailing slash to avoid double-slash URLs.
+        self._base = f"https://{host.rstrip('/')}{_UNIFI_PATH}"
         self._headers = {
             "X-API-KEY": api_key,
             "Content-Type": "application/json",
@@ -116,7 +124,7 @@ class UnifiClient:
         Raises:
             UnifiProviderError: If the API call fails.
         """
-        url = f"{_UNIFI_BASE}/sites/{zone_id}/dns-policies/{record.id}"
+        url = f"{self._base}/sites/{zone_id}/dns-policies/{record.id}"
         payload: dict[str, Any] = {
             "type": "A_RECORD",
             "enabled": True,
@@ -143,7 +151,7 @@ class UnifiClient:
         Raises:
             UnifiProviderError: If the API call fails.
         """
-        url = f"{_UNIFI_BASE}/sites/{zone_id}/dns-policies"
+        url = f"{self._base}/sites/{zone_id}/dns-policies"
         payload: dict[str, Any] = {
             "type": "A_RECORD",
             "enabled": True,
@@ -169,7 +177,7 @@ class UnifiClient:
         Raises:
             UnifiProviderError: If the API call fails.
         """
-        url = f"{_UNIFI_BASE}/sites/{zone_id}/dns-policies/{record_id}"
+        url = f"{self._base}/sites/{zone_id}/dns-policies/{record_id}"
         logger.debug("DELETE %s", url)
         await self._request("DELETE", url)
 
@@ -189,7 +197,7 @@ class UnifiClient:
         Raises:
             UnifiProviderError: If the API call fails.
         """
-        url = f"{_UNIFI_BASE}/sites/{zone_id}/dns-policies"
+        url = f"{self._base}/sites/{zone_id}/dns-policies"
         params = {"limit": _LIST_LIMIT, "offset": 0}
         logger.debug("GET %s params=%s", url, params)
         data = await self._request("GET", url, params=params)

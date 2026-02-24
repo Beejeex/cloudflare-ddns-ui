@@ -86,7 +86,7 @@ async def dashboard(
     # Fetch all UniFi DNS policies in one call upfront (avoid N per-record requests)
     unifi_error: str | None = None
     unifi_policy_map: dict[str, object] = {}
-    _, unifi_site_id, unifi_enabled = await config_service.get_unifi_config()
+    _, _, unifi_site_id, unifi_enabled = await config_service.get_unifi_config()
     if unifi_enabled and unifi_client.is_configured() and unifi_site_id:
         try:
             policies = await unifi_client.list_records(unifi_site_id)
@@ -198,7 +198,7 @@ async def settings_page(
     config = await config_service.get_config()
     zones = await config_service.get_zones()
     refresh = await config_service.get_refresh_interval()
-    unifi_api_key, unifi_site_id, unifi_enabled = await config_service.get_unifi_config()
+    unifi_host, unifi_api_key, unifi_site_id, unifi_enabled = await config_service.get_unifi_config()
     return templates.TemplateResponse(
         request,
         "settings.html",
@@ -208,6 +208,7 @@ async def settings_page(
             "interval": config.interval,
             "refresh": refresh,
             "k8s_enabled": config.k8s_enabled,
+            "unifi_host": unifi_host,
             "unifi_api_key": unifi_api_key,
             "unifi_site_id": unifi_site_id,
             "unifi_enabled": unifi_enabled,
