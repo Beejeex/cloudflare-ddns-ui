@@ -112,7 +112,7 @@ async def dashboard(
     # Discover hostnames from Kubernetes Ingress resources (optional feature)
     k8s_records: list = []
     k8s_error: str | None = None
-    if kubernetes_service.is_configured():
+    if kubernetes_service.is_enabled():
         try:
             k8s_records = await kubernetes_service.list_ingress_records()
         except KubernetesError as exc:
@@ -191,6 +191,6 @@ async def settings_page(
             "zones": json.dumps(zones),
             "interval": config.interval,
             "refresh": refresh,
-            "kubeconfig_path": config.kubeconfig_path,
+            "k8s_enabled": config.k8s_enabled,
         },
     )

@@ -35,23 +35,18 @@ def _make_ingress_list(items: list) -> SimpleNamespace:
 
 
 # ---------------------------------------------------------------------------
-# is_configured
+# is_enabled
 # ---------------------------------------------------------------------------
 
 
-def test_is_configured_returns_false_when_empty():
-    svc = KubernetesService(kubeconfig_path="")
-    assert svc.is_configured() is False
+def test_is_enabled_returns_false_when_disabled():
+    svc = KubernetesService(enabled=False)
+    assert svc.is_enabled() is False
 
 
-def test_is_configured_returns_false_for_whitespace():
-    svc = KubernetesService(kubeconfig_path="   ")
-    assert svc.is_configured() is False
-
-
-def test_is_configured_returns_true_when_path_set():
-    svc = KubernetesService(kubeconfig_path="/config/kubeconfig")
-    assert svc.is_configured() is True
+def test_is_enabled_returns_true_when_enabled():
+    svc = KubernetesService(enabled=True)
+    assert svc.is_enabled() is True
 
 
 # ---------------------------------------------------------------------------
@@ -70,7 +65,7 @@ async def test_list_ingress_records_returns_hostnames():
     with (
         patch("services.kubernetes_service.asyncio.to_thread") as mock_thread,
     ):
-        svc = KubernetesService(kubeconfig_path="/config/kubeconfig")
+        svc = KubernetesService(enabled=True)
 
         # Simulate what to_thread would return
         mock_thread.return_value = [
@@ -93,9 +88,17 @@ async def test_list_ingress_records_empty_cluster():
     """An empty cluster returns an empty list without raising."""
     with patch("services.kubernetes_service.asyncio.to_thread") as mock_thread:
         mock_thread.return_value = []
-        svc = KubernetesService(kubeconfig_path="/config/kubeconfig")
+        svc = KubernetesService(enabled=True)
         records = await svc.list_ingress_records()
 
+    assert records == []
+
+
+@pytest.mark.asyncio
+async def test_list_ingress_records_returns_empty_when_disabled():
+    """A disabled KubernetesService must return an empty list without any IO."""
+    svc = KubernetesService(enabled=False)
+    records = await svc.list_ingress_records()
     assert records == []
 
 
@@ -109,7 +112,7 @@ async def test_list_ingress_records_raises_kubernetes_error_on_api_failure():
     """A KubernetesError from the sync layer is propagated as-is."""
     with patch("services.kubernetes_service.asyncio.to_thread") as mock_thread:
         mock_thread.side_effect = KubernetesError("API 403: Forbidden")
-        svc = KubernetesService(kubeconfig_path="/config/kubeconfig")
+        svc = KubernetesService(enabled=True)
 
         with pytest.raises(KubernetesError, match="403"):
             await svc.list_ingress_records()
@@ -120,7 +123,7 @@ async def test_list_ingress_records_wraps_unexpected_errors():
     """Unexpected exceptions from asyncio.to_thread are wrapped in KubernetesError."""
     with patch("services.kubernetes_service.asyncio.to_thread") as mock_thread:
         mock_thread.side_effect = OSError("network unreachable")
-        svc = KubernetesService(kubeconfig_path="/config/kubeconfig")
+        svc = KubernetesService(enabled=True)
 
         with pytest.raises(KubernetesError, match="network unreachable"):
             await svc.list_ingress_records()
@@ -149,10 +152,11 @@ def test_collect_ingress_records_skips_rules_without_host():
     fake_api.list_ingress_for_all_namespaces.return_value = fake_list
 
     with (
+        patch("kubernetes.config.load_incluster_config", side_effect=Exception("not in cluster")),
         patch("kubernetes.config.load_kube_config"),
         patch("kubernetes.client.NetworkingV1Api", return_value=fake_api),
     ):
-        svc = KubernetesService(kubeconfig_path="/config/kubeconfig")
+        svc = KubernetesService(enabled=True)
         records = svc._collect_ingress_records()
 
     assert len(records) == 1
@@ -173,10 +177,11 @@ def test_collect_ingress_records_skips_ingress_without_rules():
     fake_api.list_ingress_for_all_namespaces.return_value = fake_list
 
     with (
+        patch("kubernetes.config.load_incluster_config", side_effect=Exception("not in cluster")),
         patch("kubernetes.config.load_kube_config"),
         patch("kubernetes.client.NetworkingV1Api", return_value=fake_api),
     ):
-        svc = KubernetesService(kubeconfig_path="/config/kubeconfig")
+        svc = KubernetesService(enabled=True)
         records = svc._collect_ingress_records()
 
     assert records == []

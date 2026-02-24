@@ -73,11 +73,18 @@ def _run_migrations() -> None:
         existing = {
             row[1] for row in conn.exec_driver_sql("PRAGMA table_info(appconfig)")
         }
+        # NOTE: Keep kubeconfig_path migration so existing databases that already
+        # have the column do not fail. No-op if the column is already present.
         if "kubeconfig_path" not in existing:
             conn.exec_driver_sql(
                 "ALTER TABLE appconfig ADD COLUMN kubeconfig_path TEXT NOT NULL DEFAULT ''"
             )
             logger.info("Migration: added 'kubeconfig_path' column to appconfig table.")
+        if "k8s_enabled" not in existing:
+            conn.exec_driver_sql(
+                "ALTER TABLE appconfig ADD COLUMN k8s_enabled INTEGER NOT NULL DEFAULT 0"
+            )
+            logger.info("Migration: added 'k8s_enabled' column to appconfig table.")
 
 
 def get_session() -> Generator[Session, None, None]:

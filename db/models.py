@@ -45,8 +45,8 @@ class AppConfig(SQLModel, table=True):
     # JSON-encoded UI section visibility state
     ui_state_json: str = Field(default='{"settings": true, "all_records": true, "logs": true}')
 
-    # Path to the kubeconfig file for Kubernetes Ingress discovery (optional)
-    kubeconfig_path: str = Field(default="")
+    # Whether Kubernetes Ingress discovery is enabled (off by default)
+    k8s_enabled: bool = Field(default=False)
 
 
 # ---------------------------------------------------------------------------

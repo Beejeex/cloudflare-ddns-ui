@@ -67,14 +67,48 @@
 
       {# ---- Kubernetes ---- #}
       <div class="form-group" style="margin-top:1.5rem;">
-        <label for="kubeconfig_path">Kubeconfig Path <span class="text-muted" style="font-weight:400;">(optional)</span></label>
-        <input type="text" id="kubeconfig_path" name="kubeconfig_path"
-               value="{{ kubeconfig_path }}" placeholder="/config/kubeconfig" autocomplete="off">
-        <small>
-          Absolute path to a kubeconfig file inside the container.
-          When set, the dashboard will auto-discover Ingress hostnames from the cluster.
-          Mount your kubeconfig at <code>/config/kubeconfig</code> via the <code>/config</code> volume.
+        <label style="display:flex; align-items:center; gap:0.75rem; cursor:pointer; font-weight:600; font-size:0.9rem; color:#334155;">
+          <input type="checkbox" name="k8s_enabled" value="true"
+                 {% if k8s_enabled %}checked{% endif %}
+                 style="width:1.1rem; height:1.1rem; cursor:pointer;">
+          <span>Enable Kubernetes Ingress Discovery</span>
+        </label>
+        <small style="display:block; margin-top:0.4rem;">
+          When enabled, the dashboard fetches Ingress hostnames from your cluster.
+          The connection is auto-detected: in-cluster service account first, then
+          <code>/config/kubeconfig</code> as a fallback.
+          A read-only ClusterRole is sufficient — see the RBAC sample below.
         </small>
+        <details style="margin-top:0.75rem; font-size:0.85rem;">
+          <summary style="cursor:pointer; color:#0284c7;">Service account RBAC setup</summary>
+          <pre style="margin-top:0.5rem; background:#0f172a; color:#a3e635; padding:0.75rem 1rem; border-radius:0.375rem; font-size:0.8rem; white-space:pre; overflow-x:auto;">apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ddns-dashboard
+  namespace: ddns
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ddns-dashboard-ingress-reader
+rules:
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ddns-dashboard-ingress-reader
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: ddns-dashboard-ingress-reader
+subjects:
+  - kind: ServiceAccount
+    name: ddns-dashboard
+    namespace: ddns</pre>
+        </details>
       </div>
 
       <div style="margin-top:1.5rem;">

@@ -101,15 +101,15 @@ class ConfigService:
         config = self._repo.load()
         return config.interval
 
-    async def get_kubeconfig_path(self) -> str:
+    async def get_k8s_enabled(self) -> bool:
         """
-        Returns the path to the kubeconfig file for Kubernetes discovery.
+        Returns whether Kubernetes Ingress discovery is enabled.
 
         Returns:
-            The kubeconfig file path string, or an empty string if not set.
+            True if the feature is enabled, False otherwise.
         """
         config = self._repo.load()
-        return config.kubeconfig_path
+        return config.k8s_enabled
 
     async def get_ui_state(self) -> dict[str, bool]:
         """
@@ -131,18 +131,18 @@ class ConfigService:
         zones: dict[str, str],
         refresh: int,
         interval: int,
-        kubeconfig_path: str = "",
+        k8s_enabled: bool = False,
     ) -> AppConfig:
         """
         Saves new Cloudflare credentials, timing configuration, and optional
-        Kubernetes kubeconfig path.
+        Kubernetes settings.
 
         Args:
             api_token: The Cloudflare API token with DNS edit permissions.
             zones: A dict mapping base domain strings to Cloudflare zone IDs.
             refresh: UI auto-refresh interval in seconds.
             interval: Background DDNS check interval in seconds.
-            kubeconfig_path: Absolute path to the kubeconfig file (optional).
+            k8s_enabled: Whether Kubernetes Ingress discovery is enabled.
 
         Returns:
             The saved AppConfig instance.
@@ -152,7 +152,7 @@ class ConfigService:
         self._repo.set_zones(config, zones)
         config.refresh = refresh
         config.interval = interval
-        config.kubeconfig_path = kubeconfig_path
+        config.k8s_enabled = k8s_enabled
         self._repo.save(config)
         logger.info("Credentials and intervals updated.")
         return config

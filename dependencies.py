@@ -188,16 +188,17 @@ async def get_kubernetes_service(
     config_service: ConfigService = Depends(get_config_service),
 ) -> KubernetesService:
     """
-    Provides a KubernetesService configured with the current kubeconfig path.
+    Provides a KubernetesService reflecting the current enable/disable toggle.
 
-    Returns a service instance regardless of whether a kubeconfig is set;
-    callers must check service.is_configured() before calling list_ingress_records().
+    The service skips discovery and returns an empty list when k8s_enabled is
+    False. Connection is auto-detected: in-cluster SA first, then
+    /config/kubeconfig as a fallback.
 
     Args:
-        config_service: Provides the stored kubeconfig file path.
+        config_service: Provides the k8s_enabled flag from the DB.
 
     Returns:
         A KubernetesService instance.
     """
-    kubeconfig_path = await config_service.get_kubeconfig_path()
-    return KubernetesService(kubeconfig_path=kubeconfig_path)
+    k8s_enabled = await config_service.get_k8s_enabled()
+    return KubernetesService(enabled=k8s_enabled)

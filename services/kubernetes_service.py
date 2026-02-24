@@ -2,7 +2,8 @@
 services/kubernetes_service.py
 
 Responsibility: Discovers DNS hostnames by reading Kubernetes Ingress resources
-across all namespaces using a kubeconfig file.
+across all namespaces. Connection is auto-detected: in-cluster service account
+first, then /config/kubeconfig as a fallback.
 Does NOT: update DNS records, interact with Cloudflare, or manage cluster state.
 """
 
@@ -47,24 +48,30 @@ class KubernetesService:
     """
     Discovers DNS hostnames from Kubernetes Ingress resources.
 
-    Loads cluster credentials from a kubeconfig file path. Scans all
-    namespaces and returns one IngressRecord per hostname found in Ingress
-    rules. Kubernetes API calls are blocking and are offloaded to a thread
+    Connection is auto-detected on first use: the service account mounted
+    inside the container is tried first (in-cluster), then
+    /config/kubeconfig as a file-based fallback. Discovery is skipped
+    entirely when the feature is disabled via the Settings toggle.
+
+    Kubernetes API calls are blocking and are offloaded to a thread
     via asyncio.to_thread to keep the async event loop unblocked.
 
     Collaborators:
         - kubernetes Python client: reads NetworkingV1 Ingress resources
     """
 
-    def __init__(self, kubeconfig_path: str) -> None:
+    # Well-known path for the file-based fallback — matches the /config volume mount.
+    _KUBECONFIG_FALLBACK = "/config/kubeconfig"
+
+    def __init__(self, enabled: bool) -> None:
         """
-        Initialises the service with a path to the kubeconfig file.
+        Initialises the service.
 
         Args:
-            kubeconfig_path: Absolute path to the kubeconfig file inside the
-                container, e.g. "/config/kubeconfig".
+            enabled: When False, list_ingress_records() returns an empty list
+                immediately without contacting the cluster.
         """
-        self._kubeconfig_path = kubeconfig_path
+        self._enabled = enabled
 
     # ---------------------------------------------------------------------------
     # Public API
@@ -74,15 +81,18 @@ class KubernetesService:
         """
         Returns all hostnames discovered from Ingress resources in all namespaces.
 
+        Returns an empty list immediately when the feature is disabled.
         Offloads the blocking Kubernetes API call to a thread pool worker.
 
         Returns:
             A list of IngressRecord instances, one per hostname.
 
         Raises:
-            KubernetesError: If the cluster is unreachable, auth fails, or the
-                kubeconfig file cannot be found or parsed.
+            KubernetesError: If the cluster is unreachable, auth fails, or no
+                kubeconfig can be found.
         """
+        if not self._enabled:
+            return []
         try:
             return await asyncio.to_thread(self._collect_ingress_records)
         except KubernetesError:
@@ -90,14 +100,14 @@ class KubernetesService:
         except Exception as exc:
             raise KubernetesError(f"Failed to connect to Kubernetes cluster: {exc}") from exc
 
-    def is_configured(self) -> bool:
+    def is_enabled(self) -> bool:
         """
-        Returns True if a non-empty kubeconfig path has been set.
+        Returns True if Kubernetes Ingress discovery is enabled.
 
         Returns:
-            True if kubeconfig_path is set, False otherwise.
+            True if enabled, False otherwise.
         """
-        return bool(self._kubeconfig_path.strip())
+        return self._enabled
 
     # ---------------------------------------------------------------------------
     # Internal helpers (sync — run via asyncio.to_thread)
@@ -107,7 +117,8 @@ class KubernetesService:
         """
         Synchronous implementation of Ingress discovery.
 
-        Loads kubeconfig, initialises the NetworkingV1 API client, and
+        Attempts in-cluster service-account auth first, then falls back to
+        /config/kubeconfig. Initialises the NetworkingV1 API client and
         iterates over all Ingress resources to extract hostnames.
 
         Returns:
@@ -128,12 +139,24 @@ class KubernetesService:
                 "Re-build the container image to include it."
             ) from exc
 
+        # NOTE: Try the in-cluster service account first (standard Kubernetes
+        # deployment). If that fails (e.g. running locally), fall back to the
+        # well-known file path at the /config volume mount.
         try:
-            k8s_config.load_kube_config(config_file=self._kubeconfig_path)
-        except Exception as exc:
-            raise KubernetesError(
-                f"Could not load kubeconfig from '{self._kubeconfig_path}': {exc}"
-            ) from exc
+            k8s_config.load_incluster_config()
+            logger.debug("Kubernetes: using in-cluster service account.")
+        except Exception:
+            # NOTE: Broad catch is intentional — load_incluster_config raises
+            # ConfigException when not running inside a pod, but we want to
+            # fall through to the file fallback regardless of error type.
+            try:
+                k8s_config.load_kube_config(config_file=self._KUBECONFIG_FALLBACK)
+                logger.debug("Kubernetes: using kubeconfig at %s.", self._KUBECONFIG_FALLBACK)
+            except Exception as exc:
+                raise KubernetesError(
+                    f"Could not load cluster credentials: no in-cluster SA and "
+                    f"no kubeconfig at '{self._KUBECONFIG_FALLBACK}': {exc}"
+                ) from exc
 
         try:
             api = k8s_client.NetworkingV1Api()
