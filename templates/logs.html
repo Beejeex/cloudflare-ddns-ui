@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+
+{% block title %}Activity Logs — DDNS Dashboard{% endblock %}
+
+{% block content %}
+
+<div class="card mt-2">
+  <div class="card-header">
+    <span class="card-title">Activity Log</span>
+    <div class="flex items-center gap-2">
+      <span class="htmx-indicator text-xs text-muted">refreshing…</span>
+      <form hx-post="/clear-logs"
+            hx-target="#log-content"
+            hx-swap="innerHTML"
+            hx-confirm="Clear all log entries? This cannot be undone."
+            style="display:inline">
+        <button type="submit" class="btn btn-ghost btn-sm">Clear Logs</button>
+      </form>
+    </div>
+  </div>
+  <div class="card-body" style="padding: 0.75rem;">
+    <div id="log-content"
+         hx-get="/api/logs/recent"
+         hx-trigger="load, every {{ refresh }}s"
+         hx-swap="innerHTML">
+      {% include "partials/log_panel.html" %}
+    </div>
+  </div>
+</div>
+
+{% endblock %}

@@ -37,21 +37,18 @@ async def dashboard(
     config_service: ConfigService = Depends(get_config_service),
     dns_service: DnsService = Depends(get_dns_service),
     stats_service: StatsService = Depends(get_stats_service),
-    log_service: LogService = Depends(get_log_service),
 ) -> HTMLResponse:
     """
     Renders the main DDNS dashboard page.
 
-    Gathers the current public IP, per-record DNS status, stats, and recent
-    logs. All expensive operations (Cloudflare API calls) are wrapped so a
-    single unavailable zone does not crash the dashboard.
+    Shows per-record DNS status, stats, and a live countdown to the next check.
+    Config and log management are on their own pages (/settings, /logs).
 
     Args:
         request: The incoming FastAPI request.
         config_service: Provides application configuration.
         dns_service: Fetches live record state from the DNS provider.
         stats_service: Provides per-record update/failure stats.
-        log_service: Provides recent UI log entries.
 
     Returns:
         An HTMLResponse rendering templates/dashboard.html.
@@ -59,8 +56,6 @@ async def dashboard(
     config = await config_service.get_config()
     zones = await config_service.get_zones()
     managed_records = await config_service.get_managed_records()
-    refresh = await config_service.get_refresh_interval()
-    ui_state = await config_service.get_ui_state()
 
     # Fetch current public IP — display "Unavailable" on failure rather than 500
     current_ip = "Unavailable"
@@ -94,18 +89,12 @@ async def dashboard(
             "last_updated": stats.last_updated.isoformat() if stats and stats.last_updated else None,
         })
 
-    # Fetch all A-records for the "add record" dropdown
+    # Fetch all A-records for the "add record" table
     all_records = []
     try:
         all_records = await dns_service.list_zone_records(zones)
     except DnsProviderError as exc:
         logger.warning("Could not list zone records for dashboard: %s", exc)
-
-    # Recent logs for the log panel
-    recent_logs = log_service.get_recent(limit=50)
-
-    import json
-    zones_json = json.dumps(zones)
 
     return templates.TemplateResponse(
         request,
@@ -114,11 +103,66 @@ async def dashboard(
             "current_ip": current_ip,
             "records": record_data,
             "all_records": all_records,
-            "api_token": config.api_token,
-            "zones": zones_json,
-            "refresh": refresh,
             "interval": config.interval,
+        },
+    )
+
+
+@router.get("/logs", response_class=HTMLResponse)
+async def logs_page(
+    request: Request,
+    log_service: LogService = Depends(get_log_service),
+    config_service: ConfigService = Depends(get_config_service),
+) -> HTMLResponse:
+    """
+    Renders the full-page activity log viewer.
+
+    Args:
+        request: The incoming FastAPI request.
+        log_service: Provides recent log entries.
+        config_service: Provides the UI refresh interval for HTMX polling.
+
+    Returns:
+        An HTMLResponse rendering templates/logs.html.
+    """
+    recent_logs = log_service.get_recent(limit=200)
+    refresh = await config_service.get_refresh_interval()
+    return templates.TemplateResponse(
+        request,
+        "logs.html",
+        {
             "logs": recent_logs,
-            "ui_state": ui_state,
+            "refresh": refresh,
+        },
+    )
+
+
+@router.get("/settings", response_class=HTMLResponse)
+async def settings_page(
+    request: Request,
+    config_service: ConfigService = Depends(get_config_service),
+) -> HTMLResponse:
+    """
+    Renders the settings / configuration page.
+
+    Args:
+        request: The incoming FastAPI request.
+        config_service: Provides current application configuration.
+
+    Returns:
+        An HTMLResponse rendering templates/settings.html.
+    """
+    import json
+    config = await config_service.get_config()
+    zones = await config_service.get_zones()
+    refresh = await config_service.get_refresh_interval()
+    return templates.TemplateResponse(
+        request,
+        "settings.html",
+        {
+            "api_token": config.api_token,
+            "zones": json.dumps(zones),
+            "interval": config.interval,
+            "refresh": refresh,
         },
     )

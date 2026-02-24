@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+
+{% block title %}Settings — DDNS Dashboard{% endblock %}
+
+{% block content %}
+
+<div class="card mt-2" style="max-width: 640px;">
+  <div class="card-header">
+    <span class="card-title">Cloudflare Settings</span>
+  </div>
+  <div class="card-body">
+
+    <div id="config-status"></div>
+
+    <form hx-post="/update-config"
+          hx-target="#config-status"
+          hx-swap="innerHTML">
+
+      <div class="form-group">
+        <label for="api_token">API Token</label>
+        <input type="password" id="api_token" name="api_token"
+               value="{{ api_token }}" autocomplete="current-password" required>
+      </div>
+
+      <div class="form-group">
+        <label for="zones">Zones (JSON)</label>
+        <textarea id="zones" name="zones" rows="4" required>{{ zones }}</textarea>
+        <small>e.g. <code>{"example.com": "zone-id-here"}</code></small>
+      </div>
+
+      <div class="form-group">
+        <label for="interval">Check Interval (seconds)</label>
+        <input type="number" id="interval" name="interval"
+               value="{{ interval }}" min="30">
+        <small>How often DNS records are checked in the background.</small>
+      </div>
+
+      <div class="form-group">
+        <label for="refresh">Log Refresh (seconds)</label>
+        <input type="number" id="refresh" name="refresh"
+               value="{{ refresh }}" min="5">
+        <small>How often the log panel auto-refreshes on the Logs page.</small>
+      </div>
+
+      <button type="submit" class="btn btn-primary w-full">Save Settings</button>
+    </form>
+
+  </div>
+</div>
+
+{% endblock %}

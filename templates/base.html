@@ -53,6 +53,36 @@
     }
 
     /* -----------------------------------------------------------------------
+       Navbar navigation links
+    ----------------------------------------------------------------------- */
+    .navbar-nav {
+      display: flex;
+      align-items: center;
+      gap: 0.125rem;
+    }
+
+    .nav-link {
+      color: #94a3b8;
+      font-size: 0.875rem;
+      font-weight: 500;
+      padding: 0.375rem 0.75rem;
+      border-radius: 0.375rem;
+      text-decoration: none;
+      transition: background 0.15s, color 0.15s;
+    }
+
+    .nav-link:hover {
+      background: rgba(255,255,255,0.08);
+      color: #f1f5f9;
+      text-decoration: none;
+    }
+
+    .nav-link-active {
+      background: rgba(255,255,255,0.12);
+      color: #f1f5f9 !important;
+    }
+
+    /* -----------------------------------------------------------------------
        Main layout
     ----------------------------------------------------------------------- */
     .container {
@@ -347,8 +377,17 @@
     <div class="navbar-brand">
       &#9729; Cloudflare DDNS
     </div>
+    <nav class="navbar-nav">
+      <a href="/" class="nav-link {% if request.url.path == '/' %}nav-link-active{% endif %}">Dashboard</a>
+      <a href="/logs" class="nav-link {% if request.url.path == '/logs' %}nav-link-active{% endif %}">Logs</a>
+      <a href="/settings" class="nav-link {% if request.url.path == '/settings' %}nav-link-active{% endif %}">Settings</a>
+    </nav>
     <div class="navbar-ip">
-      Public IP: <strong id="current-ip">{% block nav_ip %}—{% endblock %}</strong>
+      Public IP:
+      <strong id="current-ip"
+              hx-get="/api/current-ip"
+              hx-trigger="load, every 30s"
+              hx-swap="innerHTML">—</strong>
     </div>
   </nav>
 
@@ -357,5 +396,6 @@
     {% block content %}{% endblock %}
   </div>
 
+  {% block scripts %}{% endblock %}
 </body>
 </html>

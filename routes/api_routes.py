@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse
 from fastapi.templating import Jinja2Templates
 
 from dependencies import (
@@ -92,6 +92,26 @@ async def get_status(
             "stats": all_stats,
         },
     )
+
+
+@router.get("/current-ip", response_class=PlainTextResponse)
+async def current_ip(request: Request) -> str:
+    """
+    Returns the host's current public IP as plain text for the navbar HTMX poll.
+
+    Args:
+        request: The incoming FastAPI request.
+
+    Returns:
+        The public IP address string, or "Unavailable" on failure.
+    """
+    try:
+        from services.ip_service import IpService
+        ip_service = IpService(request.app.state.http_client)
+        return await ip_service.get_public_ip()
+    except IpFetchError as exc:
+        logger.warning("Could not fetch public IP for navbar: %s", exc)
+        return "Unavailable"
 
 
 @router.get("/health/json")
