@@ -12,40 +12,212 @@
 
     <div id="config-status"></div>
 
-    <form hx-post="/update-config"
+    <form id="settings-form"
+          hx-post="/update-config"
           hx-target="#config-status"
           hx-swap="innerHTML">
 
+      {# ---- API Token ---- #}
       <div class="form-group">
         <label for="api_token">API Token</label>
-        <input type="password" id="api_token" name="api_token"
-               value="{{ api_token }}" autocomplete="current-password" required>
+        <div class="input-addon">
+          <input type="password" id="api_token" name="api_token"
+                 value="{{ api_token }}" autocomplete="current-password" required>
+          <button type="button" class="addon-btn" id="token-toggle"
+                  title="Show / hide token" aria-label="Toggle token visibility">
+            <span id="token-eye">&#128065;</span>
+          </button>
+        </div>
+        <small>Read-only Cloudflare API token with <strong>Zone:DNS:Edit</strong> permission.</small>
       </div>
 
+      {# ---- Zones ---- #}
       <div class="form-group">
-        <label for="zones">Zones (JSON)</label>
-        <textarea id="zones" name="zones" rows="4" required>{{ zones }}</textarea>
-        <small>e.g. <code>{"example.com": "zone-id-here"}</code></small>
+        <label>Zones</label>
+        {# Hidden field that gets serialised by JS before submit #}
+        <input type="hidden" id="zones" name="zones" value="{{ zones }}" required>
+
+        <div id="zones-rows" style="display:flex; flex-direction:column; gap:0.5rem;">
+          {# Rows are injected by JS on load #}
+        </div>
+
+        <button type="button" id="add-zone-btn"
+                class="btn btn-ghost btn-sm mt-1" style="margin-top:0.5rem;">
+          + Add Zone
+        </button>
+        <small>Each zone maps a root domain to its Cloudflare Zone ID.</small>
       </div>
 
-      <div class="form-group">
-        <label for="interval">Check Interval (seconds)</label>
-        <input type="number" id="interval" name="interval"
-               value="{{ interval }}" min="30">
-        <small>How often DNS records are checked in the background.</small>
+      {# ---- Intervals ---- #}
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:1rem;">
+        <div class="form-group" style="margin-bottom:0;">
+          <label for="interval">Check Interval (seconds)</label>
+          <input type="number" id="interval" name="interval"
+                 value="{{ interval }}" min="30">
+          <small>Background check frequency.</small>
+        </div>
+
+        <div class="form-group" style="margin-bottom:0;">
+          <label for="refresh">Log Refresh (seconds)</label>
+          <input type="number" id="refresh" name="refresh"
+                 value="{{ refresh }}" min="5">
+          <small>Log page auto-refresh rate.</small>
+        </div>
       </div>
 
-      <div class="form-group">
-        <label for="refresh">Log Refresh (seconds)</label>
-        <input type="number" id="refresh" name="refresh"
-               value="{{ refresh }}" min="5">
-        <small>How often the log panel auto-refreshes on the Logs page.</small>
+      <div style="margin-top:1.5rem;">
+        <button type="submit" class="btn btn-primary w-full">Save Settings</button>
       </div>
-
-      <button type="submit" class="btn btn-primary w-full">Save Settings</button>
     </form>
 
   </div>
 </div>
 
+{% endblock %}
+
+{% block scripts %}
+<style>
+  .input-addon {
+    display: flex;
+    border: 1px solid #cbd5e1;
+    border-radius: 0.375rem;
+    overflow: hidden;
+  }
+  .input-addon input {
+    flex: 1;
+    border: none;
+    border-radius: 0;
+  }
+  .input-addon input:focus {
+    box-shadow: none;
+    outline: none;
+  }
+  .input-addon:focus-within {
+    border-color: #0284c7;
+    box-shadow: 0 0 0 3px rgba(2,132,199,0.15);
+  }
+  .addon-btn {
+    background: #f1f5f9;
+    border: none;
+    border-left: 1px solid #cbd5e1;
+    padding: 0 0.75rem;
+    cursor: pointer;
+    font-size: 1rem;
+    color: #64748b;
+    transition: background 0.15s;
+  }
+  .addon-btn:hover { background: #e2e8f0; }
+
+  .zone-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr auto;
+    gap: 0.5rem;
+    align-items: center;
+  }
+  .zone-row input {
+    margin: 0;
+  }
+  .zone-row .zone-id-input {
+    font-family: ui-monospace, monospace;
+    font-size: 0.8rem;
+  }
+  .zone-remove {
+    padding: 0.3rem 0.6rem;
+    color: #dc2626;
+    border-color: #fecaca;
+  }
+  .zone-remove:hover { background: #fee2e2; }
+
+  .zone-header {
+    display: grid;
+    grid-template-columns: 1fr 1fr auto;
+    gap: 0.5rem;
+    margin-bottom: 0.25rem;
+  }
+  .zone-header span {
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #64748b;
+    padding: 0 0.1rem;
+  }
+</style>
+<script>
+(function () {
+  /* ---- Token show/hide ---- */
+  const tokenInput  = document.getElementById('api_token');
+  const tokenToggle = document.getElementById('token-toggle');
+  const tokenEye    = document.getElementById('token-eye');
+  tokenToggle.addEventListener('click', function () {
+    const show = tokenInput.type === 'password';
+    tokenInput.type = show ? 'text' : 'password';
+    tokenEye.innerHTML = show ? '&#128064;' : '&#128065;';
+  });
+
+  /* ---- Zone rows ---- */
+  const zonesInput = document.getElementById('zones');
+  const container  = document.getElementById('zones-rows');
+  const addBtn     = document.getElementById('add-zone-btn');
+
+  function makeHeader() {
+    const hdr = document.createElement('div');
+    hdr.className = 'zone-header';
+    hdr.id = 'zone-header';
+    hdr.innerHTML = '<span>Domain</span><span>Zone ID</span><span></span>';
+    return hdr;
+  }
+
+  function makeRow(domain, zoneId) {
+    const row = document.createElement('div');
+    row.className = 'zone-row';
+    row.innerHTML =
+      '<input type="text" placeholder="example.com" value="' + escAttr(domain) + '" class="zone-domain">' +
+      '<input type="text" placeholder="abc123..." value="' + escAttr(zoneId) + '" class="zone-id-input">' +
+      '<button type="button" class="btn btn-ghost btn-sm zone-remove" title="Remove">&#x2715;</button>';
+    row.querySelector('.zone-remove').addEventListener('click', function () {
+      row.remove();
+      toggleHeader();
+    });
+    return row;
+  }
+
+  function toggleHeader() {
+    const existing = document.getElementById('zone-header');
+    const hasRows  = container.querySelector('.zone-row') !== null;
+    if (hasRows && !existing) container.insertBefore(makeHeader(), container.firstChild);
+    if (!hasRows && existing) existing.remove();
+  }
+
+  function escAttr(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+  }
+
+  /* Seed rows from existing zones JSON */
+  try {
+    const zones = JSON.parse(zonesInput.value || '{}');
+    Object.entries(zones).forEach(function ([domain, id]) {
+      container.appendChild(makeRow(domain, id));
+    });
+    toggleHeader();
+  } catch (e) { /* ignore invalid JSON */ }
+
+  addBtn.addEventListener('click', function () {
+    container.appendChild(makeRow('', ''));
+    toggleHeader();
+  });
+
+  /* Serialise rows → hidden input before HTMX sends the request */
+  document.getElementById('settings-form').addEventListener('htmx:configRequest', function (evt) {
+    const obj = {};
+    container.querySelectorAll('.zone-row').forEach(function (row) {
+      const domain = row.querySelector('.zone-domain').value.trim();
+      const id     = row.querySelector('.zone-id-input').value.trim();
+      if (domain && id) obj[domain] = id;
+    });
+    zonesInput.value = JSON.stringify(obj);
+    evt.detail.parameters['zones'] = zonesInput.value;
+  });
+}());
+</script>
 {% endblock %}
