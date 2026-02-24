@@ -3,3 +3,6 @@ logs/ddns.log
 logs/record_stats.json
 __pycache__/
 *.pyc
+
+# Runtime data volume
+config/
