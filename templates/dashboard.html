@@ -30,10 +30,6 @@
     <div class="stat-label">Next Check In</div>
     <div class="stat-value" id="next-check-countdown" style="font-size:1.5rem; color:#0284c7;">&mdash;</div>
   </div>
-  <div class="stat-card">
-    <div class="stat-label">Public IP</div>
-    <div class="stat-value" style="font-size:1.1rem; font-family:monospace;">{{ current_ip }}</div>
-  </div>
 </div>
 
 {# ---- Cloudflare API error banner ---- #}
@@ -129,6 +125,69 @@
   <div class="card-body">
     {% include "partials/k8s_records_table.html" %}
   </div>
+</div>
+{% endif %}
+
+{# -------------------------------------------------------------------------
+   Cloudflare Zone A-Records — all A records in the zone
+------------------------------------------------------------------------- #}
+{% if not api_error %}
+<div class="card mb-2">
+  <div class="card-header">
+    <span class="card-title">Cloudflare Zone A-Records</span>
+    <span style="font-size:0.75rem; color:#64748b;">
+      {{ zone_records | length }} record{{ 's' if zone_records | length != 1 else '' }}
+    </span>
+  </div>
+  {% if zone_records %}
+  <table>
+    <thead>
+      <tr>
+        <th>Hostname</th>
+        <th>IP</th>
+        <th>Proxied</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in zone_records %}
+      <tr>
+        <td class="record-name font-mono">{{ r.name }}</td>
+        <td class="font-mono text-sm">{{ r.content }}</td>
+        <td>
+          {% if r.proxied %}
+            <span class="badge badge-ok">Proxied</span>
+          {% else %}
+            <span class="badge badge-neutral">DNS only</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if r.name not in managed_names %}
+          <form hx-post="/add-to-managed"
+                hx-target="#records-container"
+                hx-swap="innerHTML"
+                hx-on:htmx:after-request="if(event.detail.successful) location.reload()"
+                style="display:inline">
+            <input type="hidden" name="record_name" value="{{ r.name }}">
+            <button type="submit" class="btn btn-primary btn-sm">+ Manage</button>
+          </form>
+          {% else %}
+          <span class="badge badge-ok">Managed</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% elif zone_records_error %}
+  <div class="card-body">
+    <span class="text-muted text-sm">{{ zone_records_error }}</span>
+  </div>
+  {% else %}
+  <div class="card-body">
+    <span class="text-muted text-sm">No A-records found in zone.</span>
+  </div>
+  {% endif %}
 </div>
 {% endif %}
 

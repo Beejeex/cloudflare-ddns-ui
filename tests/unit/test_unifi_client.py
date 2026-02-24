@@ -82,7 +82,7 @@ def test_is_configured_returns_true_when_key_set():
 @pytest.mark.asyncio
 async def test_list_records_returns_a_records_only(mock_http):
     """list_records must filter out non-A_RECORD types."""
-    mock_http.get(f"{_BASE}/sites/{_SITE_ID}/dns-policies").mock(
+    mock_http.get(f"{_BASE}/sites/{_SITE_ID}/dns/policies").mock(
         return_value=httpx.Response(200, json=_list_response(_POLICY_A, _POLICY_B, _CNAME_POLICY))
     )
     async with httpx.AsyncClient() as http_client:
@@ -99,7 +99,7 @@ async def test_list_records_returns_a_records_only(mock_http):
 @pytest.mark.asyncio
 async def test_list_records_returns_empty_for_empty_site(mock_http):
     """An empty site returns an empty list without raising."""
-    mock_http.get(f"{_BASE}/sites/{_SITE_ID}/dns-policies").mock(
+    mock_http.get(f"{_BASE}/sites/{_SITE_ID}/dns/policies").mock(
         return_value=httpx.Response(200, json=_list_response())
     )
     async with httpx.AsyncClient() as http_client:
@@ -112,7 +112,7 @@ async def test_list_records_returns_empty_for_empty_site(mock_http):
 @pytest.mark.asyncio
 async def test_list_records_raises_on_http_error(mock_http):
     """A 403 from the UniFi API must raise UnifiProviderError."""
-    mock_http.get(f"{_BASE}/sites/{_SITE_ID}/dns-policies").mock(
+    mock_http.get(f"{_BASE}/sites/{_SITE_ID}/dns/policies").mock(
         return_value=httpx.Response(403, text="Forbidden")
     )
     async with httpx.AsyncClient() as http_client:
@@ -129,7 +129,7 @@ async def test_list_records_raises_on_http_error(mock_http):
 @pytest.mark.asyncio
 async def test_get_record_returns_matching_policy(mock_http):
     """get_record must return the DnsRecord whose domain matches the requested name."""
-    mock_http.get(f"{_BASE}/sites/{_SITE_ID}/dns-policies").mock(
+    mock_http.get(f"{_BASE}/sites/{_SITE_ID}/dns/policies").mock(
         return_value=httpx.Response(200, json=_list_response(_POLICY_A, _POLICY_B))
     )
     async with httpx.AsyncClient() as http_client:
@@ -145,7 +145,7 @@ async def test_get_record_returns_matching_policy(mock_http):
 @pytest.mark.asyncio
 async def test_get_record_returns_none_when_not_found(mock_http):
     """get_record returns None when no matching domain exists."""
-    mock_http.get(f"{_BASE}/sites/{_SITE_ID}/dns-policies").mock(
+    mock_http.get(f"{_BASE}/sites/{_SITE_ID}/dns/policies").mock(
         return_value=httpx.Response(200, json=_list_response(_POLICY_A))
     )
     async with httpx.AsyncClient() as http_client:
@@ -164,7 +164,7 @@ async def test_get_record_returns_none_when_not_found(mock_http):
 async def test_create_record_posts_correct_payload(mock_http):
     """create_record must POST an A_RECORD body and return the created DnsRecord."""
     created = {**_POLICY_A, "id": "new-id-0001"}
-    route = mock_http.post(f"{_BASE}/sites/{_SITE_ID}/dns-policies").mock(
+    route = mock_http.post(f"{_BASE}/sites/{_SITE_ID}/dns/policies").mock(
         return_value=httpx.Response(201, json=created)
     )
     async with httpx.AsyncClient() as http_client:
@@ -183,7 +183,7 @@ async def test_create_record_posts_correct_payload(mock_http):
 @pytest.mark.asyncio
 async def test_create_record_raises_on_error(mock_http):
     """A 500 from create raises UnifiProviderError."""
-    mock_http.post(f"{_BASE}/sites/{_SITE_ID}/dns-policies").mock(
+    mock_http.post(f"{_BASE}/sites/{_SITE_ID}/dns/policies").mock(
         return_value=httpx.Response(500, text="Internal Server Error")
     )
     async with httpx.AsyncClient() as http_client:
@@ -205,7 +205,7 @@ async def test_update_record_puts_new_ip(mock_http):
         id=_POLICY_ID, name="home.example.com", content="192.168.1.10",
         type="A", ttl=14400, proxied=False, zone_id="",
     )
-    mock_http.put(f"{_BASE}/sites/{_SITE_ID}/dns-policies/{_POLICY_ID}").mock(
+    mock_http.put(f"{_BASE}/sites/{_SITE_ID}/dns/policies/{_POLICY_ID}").mock(
         return_value=httpx.Response(200, json=updated)
     )
     async with httpx.AsyncClient() as http_client:
@@ -223,7 +223,7 @@ async def test_update_record_puts_new_ip(mock_http):
 @pytest.mark.asyncio
 async def test_delete_record_sends_delete_request(mock_http):
     """delete_record must call DELETE on the policy endpoint without raising."""
-    mock_http.delete(f"{_BASE}/sites/{_SITE_ID}/dns-policies/{_POLICY_ID}").mock(
+    mock_http.delete(f"{_BASE}/sites/{_SITE_ID}/dns/policies/{_POLICY_ID}").mock(
         return_value=httpx.Response(204)
     )
     async with httpx.AsyncClient() as http_client:
@@ -240,7 +240,7 @@ async def test_delete_record_sends_delete_request(mock_http):
 @pytest.mark.asyncio
 async def test_request_error_raises_unifi_provider_error(mock_http):
     """A network-level ConnectError must be wrapped in UnifiProviderError."""
-    mock_http.get(f"{_BASE}/sites/{_SITE_ID}/dns-policies").mock(
+    mock_http.get(f"{_BASE}/sites/{_SITE_ID}/dns/policies").mock(
         side_effect=httpx.ConnectError("connection refused")
     )
     async with httpx.AsyncClient() as http_client:

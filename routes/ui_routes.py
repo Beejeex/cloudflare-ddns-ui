@@ -133,6 +133,16 @@ async def dashboard(
             logger.warning("Kubernetes ingress discovery failed: %s", exc)
             k8s_error = str(exc)
 
+    # Fetch all A-records in the zone for the zone panel (read-only overview)
+    zone_records: list = []
+    zone_records_error: str | None = None
+    if not api_error:
+        try:
+            zone_records = await dns_service.list_zone_records(zones)
+        except DnsProviderError as exc:
+            logger.warning("Could not fetch zone records: %s", exc)
+            zone_records_error = str(exc)
+
     return templates.TemplateResponse(
         request,
         "dashboard.html",
@@ -146,6 +156,8 @@ async def dashboard(
             "managed_names": managed_records,
             "unifi_enabled": unifi_enabled,
             "unifi_error": unifi_error,
+            "zone_records": zone_records,
+            "zone_records_error": zone_records_error,
         },
     )
 

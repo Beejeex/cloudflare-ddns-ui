@@ -124,7 +124,7 @@ class UnifiClient:
         Raises:
             UnifiProviderError: If the API call fails.
         """
-        url = f"{self._base}/sites/{zone_id}/dns-policies/{record.id}"
+        url = f"{self._base}/sites/{zone_id}/dns/policies/{record.id}"
         payload: dict[str, Any] = {
             "type": "A_RECORD",
             "enabled": True,
@@ -151,7 +151,7 @@ class UnifiClient:
         Raises:
             UnifiProviderError: If the API call fails.
         """
-        url = f"{self._base}/sites/{zone_id}/dns-policies"
+        url = f"{self._base}/sites/{zone_id}/dns/policies"
         payload: dict[str, Any] = {
             "type": "A_RECORD",
             "enabled": True,
@@ -177,7 +177,7 @@ class UnifiClient:
         Raises:
             UnifiProviderError: If the API call fails.
         """
-        url = f"{self._base}/sites/{zone_id}/dns-policies/{record_id}"
+        url = f"{self._base}/sites/{zone_id}/dns/policies/{record_id}"
         logger.debug("DELETE %s", url)
         await self._request("DELETE", url)
 
@@ -197,7 +197,7 @@ class UnifiClient:
         Raises:
             UnifiProviderError: If the API call fails.
         """
-        url = f"{self._base}/sites/{zone_id}/dns-policies"
+        url = f"{self._base}/sites/{zone_id}/dns/policies"
         params = {"limit": _LIST_LIMIT, "offset": 0}
         logger.debug("GET %s params=%s", url, params)
         data = await self._request("GET", url, params=params)
