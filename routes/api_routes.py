@@ -1,0 +1,105 @@
+"""
+routes/api_routes.py
+
+Responsibility: JSON and HTMX partial API endpoints consumed by the frontend
+for live polling (log tail, IP status). These are lightweight read-only endpoints.
+Does NOT: mutate state, render full pages, or perform DNS updates.
+"""
+
+from __future__ import annotations
+
+import logging
+
+from fastapi import APIRouter, Depends, Request
+from fastapi.responses import HTMLResponse
+from fastapi.templating import Jinja2Templates
+
+from dependencies import (
+    get_config_service,
+    get_log_service,
+    get_stats_service,
+)
+from exceptions import IpFetchError
+from services.config_service import ConfigService
+from services.log_service import LogService
+from services.stats_service import StatsService
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/api")
+templates = Jinja2Templates(directory="templates")
+
+
+@router.get("/logs/recent", response_class=HTMLResponse)
+async def get_recent_logs(
+    request: Request,
+    log_service: LogService = Depends(get_log_service),
+) -> HTMLResponse:
+    """
+    Returns the recent log entries as an HTML fragment for HTMX polling.
+
+    The dashboard polls this endpoint every N seconds (configured via the
+    hx-trigger attribute on the log panel) and swaps in the result.
+
+    Args:
+        request: The incoming FastAPI request.
+        log_service: Provides recent log entries from the DB.
+
+    Returns:
+        An HTMLResponse containing the log-panel partial fragment.
+    """
+    recent_logs = log_service.get_recent(limit=50)
+    return templates.TemplateResponse(
+        request,
+        "partials/log_panel.html",
+        {"logs": recent_logs},
+    )
+
+
+@router.get("/status", response_class=HTMLResponse)
+async def get_status(
+    request: Request,
+    config_service: ConfigService = Depends(get_config_service),
+    stats_service: StatsService = Depends(get_stats_service),
+) -> HTMLResponse:
+    """
+    Returns current IP and record status as an HTML fragment for HTMX polling.
+
+    Args:
+        request: The incoming FastAPI request.
+        config_service: Provides the managed records list and refresh interval.
+        stats_service: Provides up-to-date stats per record.
+
+    Returns:
+        An HTMLResponse containing the status-bar partial fragment.
+    """
+    # Fetch current public IP — show "Unavailable" rather than raising
+    current_ip = "Unavailable"
+    try:
+        from services.ip_service import IpService
+        ip_service = IpService(request.app.state.http_client)
+        current_ip = await ip_service.get_public_ip()
+    except IpFetchError as exc:
+        logger.warning("Could not fetch public IP for status endpoint: %s", exc)
+
+    all_stats = await stats_service.get_all()
+
+    return templates.TemplateResponse(
+        request,
+        "partials/status_bar.html",
+        {
+            "current_ip": current_ip,
+            "stats": all_stats,
+        },
+    )
+
+
+@router.get("/health/json")
+async def health_json() -> dict:
+    """
+    Returns application health as a JSON response.
+
+    Returns:
+        A dict with a "status" key set to "ok".
+    """
+    return {"status": "ok"}

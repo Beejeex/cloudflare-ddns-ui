@@ -1,3 +1,29 @@
-flask
-requests
+# Web framework
+fastapi
+uvicorn[standard]
+jinja2
+python-multipart
+
+# HTTP client
+httpx
+
+# Database
+sqlmodel
+
+# Scheduler
+apscheduler
+
+# File watcher
+watchdog
+
+# DNS domain parsing
 tldextract
+
+# Async file I/O
+aiofiles
+
+# Testing
+pytest
+pytest-asyncio
+pytest-cov
+respx

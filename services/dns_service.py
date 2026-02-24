@@ -1,0 +1,263 @@
+"""
+services/dns_service.py
+
+Responsibility: Orchestrates the DDNS update cycle — compares each managed
+record's current IP against the host's public IP and triggers updates when
+they differ.
+Does NOT: make HTTP calls directly, read configuration from the DB, or
+manage log file I/O.
+"""
+
+from __future__ import annotations
+
+import logging
+
+import tldextract
+
+from cloudflare.dns_provider import DnsRecord, DNSProvider
+from exceptions import DnsProviderError, IpFetchError
+from services.ip_service import IpService
+from services.log_service import LogService
+from services.stats_service import StatsService
+
+logger = logging.getLogger(__name__)
+
+
+class DnsService:
+    """
+    Orchestrates the DDNS update cycle for all managed DNS records.
+
+    For each managed record, compares the IP stored in the DNS provider
+    against the host's current public IP and updates the record when they
+    differ.  All results are recorded by StatsService and surfaced via
+    LogService.
+
+    Collaborators:
+        - DNSProvider: abstract interface satisfied by CloudflareClient (or
+          any future provider such as a Kubernetes Ingress writer)
+        - IpService: provides the current public IP
+        - StatsService: records update/failure counts per record
+        - LogService: writes UI-visible activity log entries
+    """
+
+    def __init__(
+        self,
+        dns_provider: DNSProvider,
+        ip_service: IpService,
+        stats_service: StatsService,
+        log_service: LogService,
+    ) -> None:
+        """
+        Initialises the service with all required collaborators.
+
+        Args:
+            dns_provider: Any DNSProvider implementation (e.g. CloudflareClient).
+            ip_service: Provides the current public IP of the host machine.
+            stats_service: Records per-record check/update/failure stats.
+            log_service: Writes UI-visible log entries for all DDNS events.
+        """
+        self._provider = dns_provider
+        self._ip_service = ip_service
+        self._stats = stats_service
+        self._log = log_service
+
+    # ---------------------------------------------------------------------------
+    # Public API
+    # ---------------------------------------------------------------------------
+
+    async def run_check_cycle(
+        self,
+        managed_records: list[str],
+        zones: dict[str, str],
+    ) -> None:
+        """
+        Runs a single DDNS check/update cycle for all managed records.
+
+        Fetches the current public IP once, then checks each record. If the
+        stored IP differs from the current IP, the record is updated. Stats
+        and log entries are written for every check regardless of outcome.
+
+        Args:
+            managed_records: List of FQDNs to check, e.g. ["home.example.com"].
+            zones: Mapping of base domain to provider zone ID,
+                   e.g. {"example.com": "zone_id_abc"}.
+
+        Returns:
+            None
+        """
+        if not managed_records:
+            logger.debug("No managed records — skipping check cycle.")
+            return
+
+        # Fetch the current public IP once for the entire cycle
+        try:
+            current_ip = await self._ip_service.get_public_ip()
+        except IpFetchError as exc:
+            self._log.log(f"Could not fetch public IP: {exc}", level="ERROR")
+            logger.error("IP fetch failed; aborting check cycle: %s", exc)
+            return
+
+        logger.info("Check cycle started — current IP: %s", current_ip)
+        self._log.log(f"Check cycle started. Current public IP: {current_ip}", level="INFO")
+
+        for record_name in managed_records:
+            await self._check_record(record_name, current_ip, zones)
+
+    async def check_single_record(
+        self,
+        record_name: str,
+        zones: dict[str, str],
+    ) -> DnsRecord | None:
+        """
+        Fetches the current DNS record from the provider without updating it.
+
+        Used by route handlers to display the live record state in the UI.
+
+        Args:
+            record_name: The fully-qualified DNS name to look up.
+            zones: Mapping of base domain to provider zone ID.
+
+        Returns:
+            The DnsRecord if found, or None if the record does not exist.
+
+        Raises:
+            DnsProviderError: If the provider API call fails.
+        """
+        zone_id = self._resolve_zone_id(record_name, zones)
+        if zone_id is None:
+            return None
+        return await self._provider.get_record(zone_id, record_name)
+
+    async def list_zone_records(self, zones: dict[str, str]) -> list[DnsRecord]:
+        """
+        Returns all A-records across all configured zones.
+
+        Used by the UI to populate the "add record" dropdown.
+
+        Args:
+            zones: Mapping of base domain to provider zone ID.
+
+        Returns:
+            A flat list of DnsRecord instances from all configured zones.
+        """
+        all_records: list[DnsRecord] = []
+        for zone_id in zones.values():
+            try:
+                records = await self._provider.list_records(zone_id)
+                all_records.extend(records)
+            except DnsProviderError as exc:
+                logger.warning("Could not list records for zone %s: %s", zone_id, exc)
+        return all_records
+
+    async def delete_dns_record(
+        self,
+        record_id: str,
+        record_name: str,
+        zones: dict[str, str],
+    ) -> None:
+        """
+        Deletes a DNS record from the provider and removes it from tracking.
+
+        Args:
+            record_id: The provider-assigned unique identifier of the record.
+            record_name: The FQDN of the record (used for zone resolution).
+            zones: Mapping of base domain to provider zone ID.
+
+        Returns:
+            None
+
+        Raises:
+            DnsProviderError: If the provider API call fails.
+        """
+        zone_id = self._resolve_zone_id(record_name, zones)
+        if zone_id is None:
+            raise DnsProviderError(f"No zone configured for record: {record_name}")
+        await self._provider.delete_record(zone_id, record_id)
+        self._log.log(f"Deleted DNS record: {record_name}", level="INFO")
+        await self._stats.delete_for_record(record_name)
+
+    # ---------------------------------------------------------------------------
+    # Internal helpers
+    # ---------------------------------------------------------------------------
+
+    async def _check_record(
+        self,
+        record_name: str,
+        current_ip: str,
+        zones: dict[str, str],
+    ) -> None:
+        """
+        Checks a single DNS record and updates it if the IP has changed.
+
+        All outcomes (up-to-date, updated, failed) are recorded in stats
+        and the log service.
+
+        Args:
+            record_name: The FQDN to check.
+            current_ip: The host machine's current public IP.
+            zones: Mapping of base domain to provider zone ID.
+
+        Returns:
+            None
+        """
+        zone_id = self._resolve_zone_id(record_name, zones)
+        if zone_id is None:
+            self._log.log(
+                f"No zone configured for {record_name} — skipping.",
+                level="WARNING",
+            )
+            await self._stats.record_failed(record_name)
+            return
+
+        try:
+            dns_record = await self._provider.get_record(zone_id, record_name)
+            await self._stats.record_checked(record_name)
+
+            if dns_record is None:
+                self._log.log(f"Record not found in DNS provider: {record_name}", level="WARNING")
+                await self._stats.record_failed(record_name)
+                return
+
+            if dns_record.content == current_ip:
+                logger.debug("%s is already up to date (%s).", record_name, current_ip)
+                self._log.log(f"{record_name} is up to date ({current_ip}).", level="INFO")
+                return
+
+            # IP mismatch — update the record
+            self._log.log(
+                f"IP mismatch for {record_name}: {dns_record.content} → {current_ip}. Updating...",
+                level="INFO",
+            )
+            updated = await self._provider.update_record(zone_id, dns_record, current_ip)
+            self._log.log(
+                f"Successfully updated {updated.name} to {current_ip}.",
+                level="INFO",
+            )
+            await self._stats.record_updated(record_name)
+
+        except DnsProviderError as exc:
+            self._log.log(f"Failed to update {record_name}: {exc}", level="ERROR")
+            await self._stats.record_failed(record_name)
+            logger.error("DnsProviderError for %s: %s", record_name, exc)
+
+    @staticmethod
+    def _resolve_zone_id(record_name: str, zones: dict[str, str]) -> str | None:
+        """
+        Extracts the base domain from an FQDN and looks up its zone ID.
+
+        Args:
+            record_name: A fully-qualified DNS name, e.g. "home.example.com".
+            zones: Mapping of base domain to provider zone ID.
+
+        Returns:
+            The zone ID string if found, or None if no zone is configured for
+            the record's base domain.
+        """
+        ext = tldextract.extract(record_name)
+        base_domain = f"{ext.domain}.{ext.suffix}"
+        zone_id = zones.get(base_domain)
+
+        if not zone_id:
+            logger.warning("No zone ID found for base domain: %s", base_domain)
+
+        return zone_id

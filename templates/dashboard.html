@@ -1,0 +1,195 @@
+{% extends "base.html" %}
+
+{% block title %}DDNS Dashboard{% endblock %}
+{% block nav_ip %}{{ current_ip }}{% endblock %}
+
+{% block content %}
+
+{# -------------------------------------------------------------------------
+   Stat cards row
+------------------------------------------------------------------------- #}
+<div class="card-grid mt-2">
+  <div class="stat-card">
+    <div class="stat-label">Managed Records</div>
+    <div class="stat-value">{{ records | length }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Total Updates</div>
+    <div class="stat-value">{{ records | sum(attribute='updates') }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Total Failures</div>
+    <div class="stat-value" style="color: {% if records | sum(attribute='failures') > 0 %}#dc2626{% else %}#1e293b{% endif %};">
+      {{ records | sum(attribute='failures') }}
+    </div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Check Interval</div>
+    <div class="stat-value" style="font-size:1.5rem;">{{ interval }}s</div>
+  </div>
+</div>
+
+{# -------------------------------------------------------------------------
+   Main 2-column grid: left = records + add record, right = config + logs
+------------------------------------------------------------------------- #}
+<div class="page-grid">
+
+  {# --- Left column --- #}
+  <div>
+
+    {# Managed Records Table #}
+    <div class="card mb-2">
+      <div class="card-header">
+        <span class="card-title">Managed DNS Records</span>
+        <span class="htmx-indicator text-xs text-muted">updating…</span>
+      </div>
+
+      <div id="records-container">
+        {% include "partials/records_table.html" %}
+      </div>
+    </div>
+
+    {# All Zone Records — add to managed #}
+    <div class="card mb-2">
+      <div class="card-header">
+        <span class="card-title">All A-Records in Zone</span>
+      </div>
+      <div class="card-body">
+        {% if all_records %}
+        <table>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>IP</th>
+              <th>TTL</th>
+              <th>Proxied</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% set managed_names = records | map(attribute='name') | list %}
+            {% for r in all_records %}
+            <tr>
+              <td class="font-mono text-sm">{{ r.name }}</td>
+              <td class="font-mono text-sm">{{ r.content }}</td>
+              <td class="text-muted text-sm">{{ r.ttl }}</td>
+              <td>
+                {% if r.proxied %}
+                  <span class="badge badge-warning">Proxied</span>
+                {% else %}
+                  <span class="badge badge-neutral">DNS only</span>
+                {% endif %}
+              </td>
+              <td>
+                <div class="flex gap-2">
+                  {% if r.name not in managed_names %}
+                  <form hx-post="/add-to-managed"
+                        hx-target="#records-container"
+                        hx-swap="innerHTML"
+                        style="display:inline">
+                    <input type="hidden" name="record_name" value="{{ r.name }}">
+                    <button type="submit" class="btn btn-primary btn-sm">+ Manage</button>
+                  </form>
+                  {% endif %}
+                  <form hx-post="/delete-record"
+                        hx-target="#records-container"
+                        hx-swap="innerHTML"
+                        hx-confirm="Delete {{ r.name }} from Cloudflare? This cannot be undone."
+                        style="display:inline">
+                    <input type="hidden" name="record_id" value="{{ r.id }}">
+                    <input type="hidden" name="record_name" value="{{ r.name }}">
+                    <button type="submit" class="btn btn-danger btn-sm">Delete</button>
+                  </form>
+                </div>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <p class="text-muted text-sm">No A-records found. Configure your API token and zones first.</p>
+        {% endif %}
+      </div>
+    </div>
+
+  </div>{# end left column #}
+
+  {# --- Right column --- #}
+  <div>
+
+    {# Configuration Card #}
+    <div class="card mb-2">
+      <div class="card-header">
+        <span class="card-title">Cloudflare Settings</span>
+      </div>
+      <div class="card-body">
+
+        <div id="config-status"></div>
+
+        <form hx-post="/update-config"
+              hx-target="#config-status"
+              hx-swap="innerHTML">
+
+          <div class="form-group">
+            <label for="api_token">API Token</label>
+            <input type="password" id="api_token" name="api_token"
+                   value="{{ api_token }}" required>
+          </div>
+
+          <div class="form-group">
+            <label for="zones">Zones (JSON)</label>
+            <textarea id="zones" name="zones" rows="3"
+                      required>{{ zones }}</textarea>
+            <small>e.g. <code>{"example.com": "zone-id"}</code></small>
+          </div>
+
+          <div class="form-group">
+            <label for="interval">Check Interval (seconds)</label>
+            <input type="number" id="interval" name="interval"
+                   value="{{ interval }}" min="30">
+            <small>How often DNS records are checked in the background.</small>
+          </div>
+
+          <div class="form-group">
+            <label for="refresh">Log Refresh (seconds)</label>
+            <input type="number" id="refresh" name="refresh"
+                   value="{{ refresh }}" min="5">
+            <small>How often the log panel auto-refreshes.</small>
+          </div>
+
+          <button type="submit" class="btn btn-primary w-full">Save Settings</button>
+        </form>
+
+        <div class="mt-2">
+          <form hx-post="/clear-logs"
+                hx-target="#log-content"
+                hx-swap="innerHTML"
+                hx-confirm="Clear all log entries? This cannot be undone.">
+            <button type="submit" class="btn btn-ghost w-full btn-sm">Clear Logs</button>
+          </form>
+        </div>
+      </div>
+    </div>
+
+    {# Logs Card #}
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Activity Log</span>
+        <span class="htmx-indicator text-xs text-muted">refreshing…</span>
+      </div>
+      <div class="card-body" style="padding: 0.75rem;">
+        <div id="log-content"
+             hx-get="/api/logs/recent"
+             hx-trigger="load, every {{ refresh }}s"
+             hx-swap="innerHTML">
+          {# Seeded on initial render; HTMX takes over for polling #}
+          {% include "partials/log_panel.html" %}
+        </div>
+      </div>
+    </div>
+
+  </div>{# end right column #}
+
+</div>{# end page-grid #}
+
+{% endblock %}
