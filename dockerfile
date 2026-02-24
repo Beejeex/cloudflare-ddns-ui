@@ -1,21 +1,30 @@
-FROM python:3.11-slim
+FROM python:3.12-slim
 
-# Set environment variables
+# Keep Python output unbuffered so logs appear immediately in docker logs
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-# Set working directory
+# Install curl — used only by the HEALTHCHECK probe
+RUN apt-get update && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
-# Install dependencies
+# Pre-create the config volume mount point so the container works without a volume attached
+RUN mkdir -p /config/logs
+
+# Install dependencies first so this layer is cached unless requirements.txt changes
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy source code
+# Copy application source
 COPY . .
 
-# Expose the port your Flask app runs on
 EXPOSE 8080
 
-# Start the app
-CMD ["python", "app.py"]
+# Verify the app is responding before marking the container healthy
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
+
+# Same image for dev and prod — no separate dev Dockerfile
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8080"]
