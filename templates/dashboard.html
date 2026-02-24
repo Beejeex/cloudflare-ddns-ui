@@ -91,6 +91,21 @@
 </div>
 
 {# -------------------------------------------------------------------------
+   Kubernetes Ingress Records — auto-discovered hostnames from cluster
+------------------------------------------------------------------------- #}
+{% if k8s_records is defined and (k8s_records or k8s_error) %}
+<div class="card mb-2">
+  <div class="card-header">
+    <span class="card-title">Cluster Ingress Records</span>
+    <span style="font-size:0.75rem; color:#64748b;">Auto-discovered from Kubernetes</span>
+  </div>
+  <div class="card-body">
+    {% include "partials/k8s_records_table.html" %}
+  </div>
+</div>
+{% endif %}
+
+{# -------------------------------------------------------------------------
    All zone A-records — add to managed
 ------------------------------------------------------------------------- #}
 <div class="card mb-2">

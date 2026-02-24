@@ -39,7 +39,8 @@ engine = create_engine(
 
 def init_db() -> None:
     """
-    Creates all tables defined in SQLModel metadata if they don't exist.
+    Creates all tables defined in SQLModel metadata if they don't exist,
+    then runs incremental column migrations for existing databases.
 
     Called once from the FastAPI lifespan function in app.py.
 
@@ -52,7 +53,31 @@ def init_db() -> None:
         os.makedirs(db_dir, exist_ok=True)
 
     SQLModel.metadata.create_all(engine)
+    _run_migrations()
     logger.info("Database initialised at %s", _DB_PATH)
+
+
+def _run_migrations() -> None:
+    """
+    Applies incremental schema changes to existing SQLite databases.
+
+    SQLAlchemy's create_all() does not add new columns to existing tables,
+    so each new column must be added here with an existence check.
+
+    Returns:
+        None
+    """
+    with engine.connect() as conn:
+        # NOTE: Using raw SQL for ALTER TABLE is the accepted SQLite migration
+        # pattern — SQLModel/Alembic would be overkill for a single container app.
+        existing = {
+            row[1] for row in conn.exec_driver_sql("PRAGMA table_info(appconfig)")
+        }
+        if "kubeconfig_path" not in existing:
+            conn.exec_driver_sql(
+                "ALTER TABLE appconfig ADD COLUMN kubeconfig_path TEXT NOT NULL DEFAULT ''"
+            )
+            logger.info("Migration: added 'kubeconfig_path' column to appconfig table.")
 
 
 def get_session() -> Generator[Session, None, None]:

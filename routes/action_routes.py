@@ -47,11 +47,13 @@ async def update_config(
     zones: str = Form(...),
     refresh: int = Form(30),
     interval: int = Form(300),
+    kubeconfig_path: str = Form(""),
     config_service: ConfigService = Depends(get_config_service),
     log_service: LogService = Depends(get_log_service),
 ) -> HTMLResponse:
     """
-    Saves new Cloudflare credentials and timing configuration.
+    Saves new Cloudflare credentials, timing configuration, and optional
+    Kubernetes kubeconfig path.
 
     HTMX swaps the returned fragment into #config-status on the page.
 
@@ -61,6 +63,7 @@ async def update_config(
         zones: JSON string of base-domain-to-zone-ID mapping.
         refresh: UI auto-refresh interval in seconds.
         interval: Background DDNS check interval in seconds.
+        kubeconfig_path: Path to kubeconfig file for k8s discovery (optional).
         config_service: Saves the new configuration.
         log_service: Writes a UI log entry on success.
 
@@ -78,6 +81,7 @@ async def update_config(
         zones=zones_dict,
         refresh=refresh,
         interval=interval,
+        kubeconfig_path=kubeconfig_path,
     )
 
     # Reschedule the background job with the new interval

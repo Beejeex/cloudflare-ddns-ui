@@ -101,6 +101,16 @@ class ConfigService:
         config = self._repo.load()
         return config.interval
 
+    async def get_kubeconfig_path(self) -> str:
+        """
+        Returns the path to the kubeconfig file for Kubernetes discovery.
+
+        Returns:
+            The kubeconfig file path string, or an empty string if not set.
+        """
+        config = self._repo.load()
+        return config.kubeconfig_path
+
     async def get_ui_state(self) -> dict[str, bool]:
         """
         Returns the UI section visibility state.
@@ -121,15 +131,18 @@ class ConfigService:
         zones: dict[str, str],
         refresh: int,
         interval: int,
+        kubeconfig_path: str = "",
     ) -> AppConfig:
         """
-        Saves new Cloudflare credentials and timing configuration.
+        Saves new Cloudflare credentials, timing configuration, and optional
+        Kubernetes kubeconfig path.
 
         Args:
             api_token: The Cloudflare API token with DNS edit permissions.
             zones: A dict mapping base domain strings to Cloudflare zone IDs.
             refresh: UI auto-refresh interval in seconds.
             interval: Background DDNS check interval in seconds.
+            kubeconfig_path: Absolute path to the kubeconfig file (optional).
 
         Returns:
             The saved AppConfig instance.
@@ -139,6 +152,7 @@ class ConfigService:
         self._repo.set_zones(config, zones)
         config.refresh = refresh
         config.interval = interval
+        config.kubeconfig_path = kubeconfig_path
         self._repo.save(config)
         logger.info("Credentials and intervals updated.")
         return config

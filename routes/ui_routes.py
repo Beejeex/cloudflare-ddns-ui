@@ -16,12 +16,14 @@ from fastapi.templating import Jinja2Templates
 from dependencies import (
     get_config_service,
     get_dns_service,
+    get_kubernetes_service,
     get_log_service,
     get_stats_service,
 )
-from exceptions import DnsProviderError, IpFetchError
+from exceptions import DnsProviderError, IpFetchError, KubernetesError
 from services.config_service import ConfigService
 from services.dns_service import DnsService
+from services.kubernetes_service import KubernetesService
 from services.log_service import LogService
 from services.stats_service import StatsService
 
@@ -37,18 +39,20 @@ async def dashboard(
     config_service: ConfigService = Depends(get_config_service),
     dns_service: DnsService = Depends(get_dns_service),
     stats_service: StatsService = Depends(get_stats_service),
+    kubernetes_service: KubernetesService = Depends(get_kubernetes_service),
 ) -> HTMLResponse:
     """
     Renders the main DDNS dashboard page.
 
-    Shows per-record DNS status, stats, and a live countdown to the next check.
-    Config and log management are on their own pages (/settings, /logs).
+    Shows per-record DNS status, stats, a live countdown to the next check,
+    and (when configured) hostnames discovered from Kubernetes Ingress resources.
 
     Args:
         request: The incoming FastAPI request.
         config_service: Provides application configuration.
         dns_service: Fetches live record state from the DNS provider.
         stats_service: Provides per-record update/failure stats.
+        kubernetes_service: Discovers hostnames from cluster Ingress resources.
 
     Returns:
         An HTMLResponse rendering templates/dashboard.html.
@@ -105,6 +109,16 @@ async def dashboard(
         if not api_error:
             api_error = str(exc)
 
+    # Discover hostnames from Kubernetes Ingress resources (optional feature)
+    k8s_records: list = []
+    k8s_error: str | None = None
+    if kubernetes_service.is_configured():
+        try:
+            k8s_records = await kubernetes_service.list_ingress_records()
+        except KubernetesError as exc:
+            logger.warning("Kubernetes ingress discovery failed: %s", exc)
+            k8s_error = str(exc)
+
     return templates.TemplateResponse(
         request,
         "dashboard.html",
@@ -114,6 +128,9 @@ async def dashboard(
             "all_records": all_records,
             "interval": config.interval,
             "api_error": api_error,
+            "k8s_records": k8s_records,
+            "k8s_error": k8s_error,
+            "managed_names": managed_records,
         },
     )
 
@@ -174,5 +191,6 @@ async def settings_page(
             "zones": json.dumps(zones),
             "interval": config.interval,
             "refresh": refresh,
+            "kubeconfig_path": config.kubeconfig_path,
         },
     )

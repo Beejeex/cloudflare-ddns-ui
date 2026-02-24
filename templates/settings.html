@@ -65,6 +65,18 @@
         </div>
       </div>
 
+      {# ---- Kubernetes ---- #}
+      <div class="form-group" style="margin-top:1.5rem;">
+        <label for="kubeconfig_path">Kubeconfig Path <span class="text-muted" style="font-weight:400;">(optional)</span></label>
+        <input type="text" id="kubeconfig_path" name="kubeconfig_path"
+               value="{{ kubeconfig_path }}" placeholder="/config/kubeconfig" autocomplete="off">
+        <small>
+          Absolute path to a kubeconfig file inside the container.
+          When set, the dashboard will auto-discover Ingress hostnames from the cluster.
+          Mount your kubeconfig at <code>/config/kubeconfig</code> via the <code>/config</code> volume.
+        </small>
+      </div>
+
       <div style="margin-top:1.5rem;">
         <button type="submit" class="btn btn-primary w-full">Save Settings</button>
       </div>

@@ -31,3 +31,10 @@ class ConfigLoadError(Exception):
     Raised by ConfigRepository when the configuration row is missing or
     cannot be parsed from the database.
     """
+
+
+class KubernetesError(Exception):
+    """
+    Raised by KubernetesService when the cluster cannot be reached,
+    authentication fails, or Ingress resources cannot be listed.
+    """

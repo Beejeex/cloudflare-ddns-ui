@@ -20,6 +20,7 @@ from repositories.stats_repository import StatsRepository
 from services.config_service import ConfigService
 from services.dns_service import DnsService
 from services.ip_service import IpService
+from services.kubernetes_service import KubernetesService
 from services.log_service import LogService
 from services.stats_service import StatsService
 
@@ -181,3 +182,22 @@ def get_dns_service(
         A DnsService instance ready to use.
     """
     return DnsService(dns_provider, ip_service, stats_service, log_service)
+
+
+async def get_kubernetes_service(
+    config_service: ConfigService = Depends(get_config_service),
+) -> KubernetesService:
+    """
+    Provides a KubernetesService configured with the current kubeconfig path.
+
+    Returns a service instance regardless of whether a kubeconfig is set;
+    callers must check service.is_configured() before calling list_ingress_records().
+
+    Args:
+        config_service: Provides the stored kubeconfig file path.
+
+    Returns:
+        A KubernetesService instance.
+    """
+    kubeconfig_path = await config_service.get_kubeconfig_path()
+    return KubernetesService(kubeconfig_path=kubeconfig_path)
