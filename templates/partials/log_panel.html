@@ -1,0 +1,16 @@
+{# partials/log_panel.html
+   Responsibility: Renders the recent log entries for the activity log panel.
+   Returned as an HTMX fragment by GET /api/logs/recent (polled every N seconds)
+   and by POST /clear-logs.
+   Target: #log-content (innerHTML swap).
+#}
+
+<div class="log-viewer">
+  {% if logs %}
+    {% for entry in logs %}
+    <div class="log-line {% if entry.level == 'ERROR' %}error{% elif entry.level == 'WARNING' %}warning{% else %}info{% endif %}">{{ entry.timestamp.strftime('%Y-%m-%d %H:%M:%S') if entry.timestamp else '' }} [{{ entry.level }}] {{ entry.message }}</div>
+    {% endfor %}
+  {% else %}
+    <div class="log-line text-muted">No log entries yet.</div>
+  {% endif %}
+</div>

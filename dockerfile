@@ -4,7 +4,10 @@ FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-# Install curl — used only by the HEALTHCHECK probe
+# Default DB path — override by mounting /config as a volume
+ENV DB_PATH=/config/ddns.db
+
+# Install curl — needed for HTMX download and the HEALTHCHECK probe
 RUN apt-get update && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/*
 
@@ -13,12 +16,16 @@ WORKDIR /app
 # Pre-create the config volume mount point so the container works without a volume attached
 RUN mkdir -p /config/logs
 
-# Install dependencies first so this layer is cached unless requirements.txt changes
+# Install Python dependencies first so this layer is cached unless requirements.txt changes
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application source
 COPY . .
+
+# Download HTMX so it is served locally — no CDN dependency at runtime
+RUN curl -fsSL https://unpkg.com/htmx.org@2.0.4/dist/htmx.min.js \
+      -o /app/static/htmx.min.js
 
 EXPOSE 8080
 

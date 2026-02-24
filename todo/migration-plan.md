@@ -1,6 +1,8 @@
 # Migration Plan — Flask → FastAPI + SQLModel + HTMX
 
 > **Versioning:** The current Flask app is tagged `v1.0.0`. The completed FastAPI rewrite will be tagged `v2.0.0`.
+>
+> **Branch:** All migration work happens on `feature/v2-fastapi-rewrite`. Merge to `main` via PR only after Phase 12 smoke test passes, then tag `v2.0.0`.
 
 ## Summary of Changes
 
@@ -430,7 +432,8 @@
 - [ ] **12.4** Add a managed record via the UI; confirm it appears in the table without a full page reload.
 - [ ] **12.5** Trigger a manual update; confirm the record row updates in place via HTMX.
 - [ ] **12.6** Restart the container; confirm config and stats survive (volume mount working).
-- [ ] **12.7** Tag the release:
+- [ ] **12.7** Merge `feature/v2-fastapi-rewrite` → `main` via pull request.
+- [ ] **12.8** Tag the release on `main`:
   ```bash
   git tag v2.0.0
   git push origin v2.0.0

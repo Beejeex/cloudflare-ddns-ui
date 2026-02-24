@@ -1,0 +1,11 @@
+{# partials/config_status.html
+   Responsibility: Renders a success or error message after a config save action.
+   Returned as an HTMX fragment by POST /update-config.
+   Target: #config-status (innerHTML swap).
+#}
+
+{% if success %}
+<div class="alert alert-success mb-1">{{ message }}</div>
+{% else %}
+<div class="alert alert-error mb-1">{{ message }}</div>
+{% endif %}

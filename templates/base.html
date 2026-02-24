@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}Cloudflare DDNS Dashboard{% endblock %}</title>
+  <script src="/static/htmx.min.js" defer></script>
+  <style>
+    /* -----------------------------------------------------------------------
+       Reset & base
+    ----------------------------------------------------------------------- */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      font-size: 0.9375rem;
+      background: #f1f5f9; /* slate-100 */
+      color: #1e293b;      /* slate-800 */
+    }
+
+    a { color: #0284c7; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    /* -----------------------------------------------------------------------
+       Navigation
+    ----------------------------------------------------------------------- */
+    .navbar {
+      background: #1e293b; /* slate-800 */
+      padding: 0 1.5rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 56px;
+    }
+
+    .navbar-brand {
+      color: #f1f5f9;
+      font-size: 1rem;
+      font-weight: 700;
+      letter-spacing: 0.01em;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .navbar-ip {
+      color: #94a3b8; /* slate-400 */
+      font-size: 0.8125rem;
+    }
+
+    .navbar-ip strong {
+      color: #e2e8f0; /* slate-200 */
+    }
+
+    /* -----------------------------------------------------------------------
+       Navbar navigation links
+    ----------------------------------------------------------------------- */
+    .navbar-nav {
+      display: flex;
+      align-items: center;
+      gap: 0.125rem;
+    }
+
+    .nav-link {
+      color: #94a3b8;
+      font-size: 0.875rem;
+      font-weight: 500;
+      padding: 0.375rem 0.75rem;
+      border-radius: 0.375rem;
+      text-decoration: none;
+      transition: background 0.15s, color 0.15s;
+    }
+
+    .nav-link:hover {
+      background: rgba(255,255,255,0.08);
+      color: #f1f5f9;
+      text-decoration: none;
+    }
+
+    .nav-link-active {
+      background: rgba(255,255,255,0.12);
+      color: #f1f5f9 !important;
+    }
+
+    /* -----------------------------------------------------------------------
+       Main layout
+    ----------------------------------------------------------------------- */
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 1.5rem;
+    }
+
+    .page-grid {
+      display: grid;
+      grid-template-columns: 1fr 360px;
+      gap: 1.5rem;
+      align-items: start;
+    }
+
+    @media (max-width: 900px) {
+      .page-grid { grid-template-columns: 1fr; }
+    }
+
+    /* -----------------------------------------------------------------------
+       Cards
+    ----------------------------------------------------------------------- */
+    .card {
+      background: #fff;
+      border: 1px solid #e2e8f0; /* slate-200 */
+      border-radius: 0.5rem;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+      overflow: hidden;
+    }
+
+    .card-header {
+      padding: 0.875rem 1.25rem;
+      border-bottom: 1px solid #e2e8f0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .card-title {
+      font-size: 0.8125rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #64748b; /* slate-500 */
+    }
+
+    .card-body {
+      padding: 1.25rem;
+    }
+
+    /* -----------------------------------------------------------------------
+       Stat cards grid
+    ----------------------------------------------------------------------- */
+    .card-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .stat-card {
+      background: #fff;
+      border: 1px solid #e2e8f0;
+      border-radius: 0.5rem;
+      padding: 1rem 1.25rem;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+    }
+
+    .stat-label {
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #64748b; /* slate-500 */
+      margin-bottom: 0.375rem;
+    }
+
+    .stat-value {
+      font-size: 2rem;
+      font-weight: 700;
+      color: #1e293b;
+      line-height: 1;
+    }
+
+    /* -----------------------------------------------------------------------
+       Tables
+    ----------------------------------------------------------------------- */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.875rem;
+    }
+
+    th {
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #64748b; /* slate-500 */
+      padding: 0.625rem 0.875rem;
+      border-bottom: 1px solid #e2e8f0;
+      text-align: left;
+      background: #fff;
+    }
+
+    td {
+      padding: 0.625rem 0.875rem;
+      border-bottom: 1px solid #e2e8f0;
+      color: #334155;
+      vertical-align: middle;
+    }
+
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: #f8fafc; } /* slate-50 */
+
+    .record-name {
+      font-weight: 600;
+      color: #1e293b;
+    }
+
+    /* -----------------------------------------------------------------------
+       Badges
+    ----------------------------------------------------------------------- */
+    .badge {
+      display: inline-block;
+      padding: 0.2em 0.65em;
+      border-radius: 999px;
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+
+    .badge-ok      { background: #dcfce7; color: #16a34a; } /* green-100 / green-600 */
+    .badge-warning { background: #fef9c3; color: #ca8a04; } /* yellow-100 / yellow-600 */
+    .badge-error   { background: #fee2e2; color: #dc2626; } /* red-100 / red-600 */
+    .badge-neutral { background: #f1f5f9; color: #64748b; }
+
+    /* -----------------------------------------------------------------------
+       Forms
+    ----------------------------------------------------------------------- */
+    .form-group {
+      margin-bottom: 1rem;
+    }
+
+    .form-group label {
+      display: block;
+      font-size: 0.85rem;
+      font-weight: 500;
+      color: #475569; /* slate-600 */
+      margin-bottom: 0.375rem;
+    }
+
+    .form-group small {
+      display: block;
+      font-size: 0.75rem;
+      color: #94a3b8;
+      margin-top: 0.25rem;
+    }
+
+    input[type="text"],
+    input[type="number"],
+    input[type="password"],
+    textarea,
+    select {
+      width: 100%;
+      padding: 0.5rem 0.75rem;
+      border: 1px solid #cbd5e1; /* slate-300 */
+      border-radius: 0.375rem;
+      font-size: 0.875rem;
+      color: #1e293b;
+      background: #fff;
+      transition: border-color 0.15s;
+    }
+
+    input:focus, textarea:focus, select:focus {
+      outline: none;
+      border-color: #0284c7; /* sky-600 */
+      box-shadow: 0 0 0 3px rgba(2,132,199,0.15);
+    }
+
+    textarea { resize: vertical; min-height: 80px; }
+
+    /* -----------------------------------------------------------------------
+       Buttons
+    ----------------------------------------------------------------------- */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.375rem;
+      padding: 0.5rem 1rem;
+      border: none;
+      border-radius: 0.375rem;
+      font-size: 0.875rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+
+    .btn-primary {
+      background: #0284c7; /* sky-600 */
+      color: #fff;
+    }
+    .btn-primary:hover { background: #0369a1; } /* sky-700 */
+
+    .btn-danger {
+      background: #dc2626; /* red-600 */
+      color: #fff;
+    }
+    .btn-danger:hover { background: #b91c1c; } /* red-700 */
+
+    .btn-ghost {
+      background: transparent;
+      color: #64748b;
+      border: 1px solid #e2e8f0;
+    }
+    .btn-ghost:hover { background: #f1f5f9; }
+
+    .btn-sm {
+      padding: 0.3rem 0.65rem;
+      font-size: 0.8125rem;
+    }
+
+    /* -----------------------------------------------------------------------
+       Log viewer
+    ----------------------------------------------------------------------- */
+    .log-viewer {
+      background: #0f172a; /* slate-950 */
+      color: #a3e635;       /* lime-400 */
+      border-radius: 0.375rem;
+      padding: 0.875rem 1rem;
+      font-family: "Cascadia Mono", "Fira Mono", ui-monospace, monospace;
+      font-size: 0.8rem;
+      line-height: 1.55;
+      min-height: 200px;
+      max-height: 400px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+
+    .log-line { margin-bottom: 0.1rem; }
+    .log-line.error   { color: #f87171; } /* red-400 */
+    .log-line.warning { color: #fbbf24; } /* amber-400 */
+    .log-line.info    { color: #a3e635; }
+
+    /* -----------------------------------------------------------------------
+       HTMX indicators
+    ----------------------------------------------------------------------- */
+    .htmx-indicator {
+      opacity: 0;
+      transition: opacity 0.15s;
+      font-size: 0.75rem;
+      color: #94a3b8;
+    }
+    .htmx-request .htmx-indicator { opacity: 1; }
+    .htmx-request.htmx-indicator  { opacity: 1; }
+
+    /* -----------------------------------------------------------------------
+       Alerts / status messages
+    ----------------------------------------------------------------------- */
+    .alert {
+      padding: 0.75rem 1rem;
+      border-radius: 0.375rem;
+      font-size: 0.875rem;
+      margin-bottom: 1rem;
+    }
+    .alert-success { background: #dcfce7; color: #15803d; border: 1px solid #bbf7d0; }
+    .alert-error   { background: #fee2e2; color: #b91c1c; border: 1px solid #fecaca; }
+
+    /* -----------------------------------------------------------------------
+       Utilities
+    ----------------------------------------------------------------------- */
+    .mt-1 { margin-top: 0.5rem; }
+    .mt-2 { margin-top: 1rem; }
+    .mt-3 { margin-top: 1.5rem; }
+    .mb-1 { margin-bottom: 0.5rem; }
+    .mb-2 { margin-bottom: 1rem; }
+    .flex  { display: flex; }
+    .items-center { align-items: center; }
+    .gap-2 { gap: 0.5rem; }
+    .gap-3 { gap: 0.75rem; }
+    .text-sm { font-size: 0.875rem; }
+    .text-xs { font-size: 0.75rem; }
+    .text-muted { color: #94a3b8; }
+    .font-mono { font-family: ui-monospace, monospace; }
+    .w-full { width: 100%; }
+  </style>
+</head>
+<body>
+
+  <!-- Nav -->
+  <nav class="navbar">
+    <div class="navbar-brand">
+      &#9729; Cloudflare DDNS
+    </div>
+    <nav class="navbar-nav">
+      <a href="/" class="nav-link {% if request.url.path == '/' %}nav-link-active{% endif %}">Dashboard</a>
+      <a href="/logs" class="nav-link {% if request.url.path == '/logs' %}nav-link-active{% endif %}">Logs</a>
+      <a href="/settings" class="nav-link {% if request.url.path == '/settings' %}nav-link-active{% endif %}">Settings</a>
+    </nav>
+    <div class="navbar-ip">
+      Public IP:
+      <strong id="current-ip"
+              hx-get="/api/current-ip"
+              hx-trigger="load, every 30s"
+              hx-swap="innerHTML">—</strong>
+    </div>
+  </nav>
+
+  <!-- Page content -->
+  <div class="container">
+    {% block content %}{% endblock %}
+  </div>
+
+  {% block scripts %}{% endblock %}
+</body>
+</html>
