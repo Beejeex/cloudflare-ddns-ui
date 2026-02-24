@@ -47,6 +47,7 @@
               hx-target="#records-container"
               hx-swap="innerHTML"
               hx-confirm="Remove {{ r.name }} from managed records?"
+              hx-on:htmx:after-request="if(event.detail.successful) location.reload()"
               style="display:inline">
           <input type="hidden" name="record_name" value="{{ r.name }}">
           <button type="submit" class="btn btn-ghost btn-sm">Remove</button>

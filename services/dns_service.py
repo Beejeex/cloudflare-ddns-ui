@@ -155,6 +155,34 @@ class DnsService:
             raise DnsProviderError(errors[0])
         return all_records
 
+    async def create_dns_record(
+        self,
+        record_name: str,
+        ip: str,
+        zones: dict[str, str],
+    ) -> DnsRecord:
+        """
+        Creates a new Cloudflare A-record and logs the action.
+
+        Args:
+            record_name: The fully-qualified DNS name to create.
+            ip: The IPv4 address for the new record.
+            zones: Mapping of base domain to provider zone ID.
+
+        Returns:
+            The newly created DnsRecord.
+
+        Raises:
+            DnsProviderError: If no zone is configured for the name, or if
+                the provider API call fails.
+        """
+        zone_id = self._resolve_zone_id(record_name, zones)
+        if zone_id is None:
+            raise DnsProviderError(f"No zone configured for record: {record_name}")
+        record = await self._provider.create_record(zone_id, record_name, ip)
+        self._log.log(f"Created DNS record: {record_name} → {ip}", level="INFO")
+        return record
+
     async def delete_dns_record(
         self,
         record_id: str,

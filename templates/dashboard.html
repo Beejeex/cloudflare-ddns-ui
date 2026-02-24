@@ -60,6 +60,37 @@
 </div>
 
 {# -------------------------------------------------------------------------
+   Create new A-record
+------------------------------------------------------------------------- #}
+<div class="card mb-2">
+  <div class="card-header">
+    <span class="card-title">Create New A-Record</span>
+  </div>
+  <div class="card-body">
+    <div id="create-record-status"></div>
+    <form hx-post="/create-record"
+          hx-target="#create-record-status"
+          hx-swap="innerHTML"
+          hx-on:htmx:after-request="if(event.detail.successful && !this.querySelector('.alert-error')) { this.reset(); location.reload(); }"
+          style="display:flex; gap:0.75rem; align-items:flex-end; flex-wrap:wrap;">
+      <div class="form-group" style="flex:2; min-width:180px; margin-bottom:0;">
+        <label for="create-record-name">Record Name (FQDN)</label>
+        <input type="text" id="create-record-name" name="record_name"
+               placeholder="home.example.com" required>
+      </div>
+      <div class="form-group" style="flex:1; min-width:140px; margin-bottom:0;">
+        <label for="create-record-ip">IP Address</label>
+        <input type="text" id="create-record-ip" name="record_ip"
+               placeholder="{{ current_ip }}" value="{{ current_ip }}" required>
+      </div>
+      <div style="padding-bottom:0;">
+        <button type="submit" class="btn btn-primary">Create &amp; Manage</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+{# -------------------------------------------------------------------------
    All zone A-records — add to managed
 ------------------------------------------------------------------------- #}
 <div class="card mb-2">
@@ -98,15 +129,19 @@
               <form hx-post="/add-to-managed"
                     hx-target="#records-container"
                     hx-swap="innerHTML"
+                    hx-on:htmx:after-request="if(event.detail.successful) location.reload()"
                     style="display:inline">
                 <input type="hidden" name="record_name" value="{{ r.name }}">
                 <button type="submit" class="btn btn-primary btn-sm">+ Manage</button>
               </form>
+              {% else %}
+              <span class="badge badge-ok">Managed</span>
               {% endif %}
               <form hx-post="/delete-record"
                     hx-target="#records-container"
                     hx-swap="innerHTML"
                     hx-confirm="Delete {{ r.name }} from Cloudflare? This cannot be undone."
+                    hx-on:htmx:after-request="if(event.detail.successful) location.reload()"
                     style="display:inline">
                 <input type="hidden" name="record_id" value="{{ r.id }}">
                 <input type="hidden" name="record_name" value="{{ r.name }}">
