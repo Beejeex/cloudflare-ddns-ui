@@ -102,4 +102,4 @@ Known limitations in the current beta:
 
 ## License
 
-CC BY-NC 4.0 — Free for personal/non-commercial use. See [LICENSE](LICENSE) file.
+CC BY-NC-SA 4.0 — Free for personal/non-commercial use; modifications must be shared under the same license. See [LICENSE](LICENSE) file.
