@@ -19,9 +19,9 @@ managed by SQLModel.
 | Web framework | FastAPI | Async, Pydantic-native, built-in `Depends()` DI |
 | Templates | Jinja2 + HTMX | Jinja2 renders HTML; HTMX drives partial updates |
 | HTTP client | httpx | Async-first; replaces `requests` everywhere |
-| Scheduler | APScheduler | Replaces raw `threading` loop in `updater.py` |
+| Scheduler | APScheduler | `AsyncIOScheduler` manages the periodic DDNS check job |
 | File watcher | watchdog | Detects out-of-band config changes on the volume |
-| Database | SQLite via SQLModel | Replaces JSON flat-files for config and stats |
+| Database | SQLite via SQLModel | Stores config, stats, and log entries |
 | Container | python:3.12-slim | Single self-contained image; no external services |
 | Testing | pytest + pytest-asyncio + respx | Unit and integration tests; no real network calls |
 
@@ -38,14 +38,14 @@ Below is what each principle means in the context of THIS codebase.
 > Every module, class, or function should have **one reason to change**.
 
 - Each file must own exactly **one concern**. Do not mix database access with business logic, or HTTP calls with UI rendering.
-- `config.py` must be split: DB access belongs in a repository, IP fetching belongs in its own service, UI state belongs in its own service.
+- Config DB access lives in `config_repository.py`; IP fetching lives in `ip_service.py`; UI/application config logic lives in `config_service.py`.
 - Route handlers must be thin. They receive a request, call a service, and return a rendered template fragment (for HTMX) or a full response. All business logic lives in service classes.
-- `logger.py` must be split: writing log entries is separate from reading/parsing logs and separate from cleanup scheduling.
-- `cloudflare_client.py` must contain **all** Cloudflare HTTP calls. Routes must never call `httpx` directly for Cloudflare endpoints.
-- The APScheduler job must delegate all business logic to `dns_service` — the job function itself only triggers the service.
-- `watchdog` observer setup belongs in its own module; it must not contain DNS or config business logic.
+- Log writes and reads are separated: `log_service.py` reads/filters log entries; `log_cleanup.py` handles cleanup scheduling.
+- `cloudflare_client.py` contains **all** Cloudflare HTTP calls. Routes must never call `httpx` directly for Cloudflare endpoints.
+- The APScheduler job delegates all business logic to `dns_service` — the job function itself only triggers the service.
+- `watcher.py` owns the watchdog observer setup; it contains no DNS or config business logic.
 
-**Target module structure:**
+**Module structure:**
 ```
 services/
     ip_service.py          # Fetches and caches the current public IP (uses httpx)
@@ -72,10 +72,9 @@ cloudflare/
 routes/
     ui_routes.py           # GET handlers that render full pages
     action_routes.py       # POST handlers that return HTMX partial fragments
-    api_routes.py          # Optional: JSON API endpoints
+    api_routes.py          # JSON API endpoints (current IP, logs)
 
-logger.py                  # Write-only logger: log(message, level)
-log_cleanup.py             # Cleanup scheduler: should_run_cleanup, cleanup_old_logs
+log_cleanup.py             # Cleanup scheduler: trims old LogEntry rows from SQLite
 scheduler.py               # APScheduler setup; registers the DDNS check job
 watcher.py                 # watchdog observer; detects out-of-band config file changes
 exceptions.py              # All custom exception classes: DnsProviderError, ConfigLoadError, IpFetchError
@@ -216,7 +215,7 @@ Use section comments in longer files to group related logic:
 - Configure logging **once** in `app.py` using `logging.basicConfig` at module level before the app is created. No other file may call `logging.basicConfig`.
 - Use the standard format: `"%(asctime)s [%(levelname)s] %(name)s: %(message)s"`.
 - All modules obtain their logger via `logger = logging.getLogger(__name__)` — never use `print()` in service or repository code.
-- The write-only `logger.py` helper (for the DDNS log file) is separate from Python's `logging` module configuration and is used only for the visible log panel in the UI.
+- DDNS activity logs (the visible log panel) are stored as `LogEntry` rows in SQLite, written by `dns_service.py` and read by `log_service.py`. There is no separate log file.
 
 ---
 
