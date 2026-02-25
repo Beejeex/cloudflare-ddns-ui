@@ -200,7 +200,7 @@
 <script>
 (function () {
   const interval = {{ interval | int }};
-  let remaining = interval;
+  let remaining = {{ next_check_in | int }};
   const el = document.getElementById('next-check-countdown');
   function tick() {
     el.textContent = remaining + 's';
