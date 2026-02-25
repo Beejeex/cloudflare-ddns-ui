@@ -511,6 +511,29 @@ def health() -> dict:
     return {"status": "ok"}
 ```
 
+### Container Registry
+
+The production image is published to **GitHub Container Registry (GHCR)**:
+
+```
+ghcr.io/beejeex/cloudflare-ddns-ui
+```
+
+Tag convention:
+- `ghcr.io/beejeex/cloudflare-ddns-ui:<version>` — immutable release tag (e.g. `2.0.1`)
+- `ghcr.io/beejeex/cloudflare-ddns-ui:latest` — always points to the most recent release
+
+Build and push workflow:
+```bash
+docker build -t ddns-dashboard:<version> -t ddns-dashboard:latest .
+docker tag ddns-dashboard:<version> ghcr.io/beejeex/cloudflare-ddns-ui:<version>
+docker tag ddns-dashboard:latest   ghcr.io/beejeex/cloudflare-ddns-ui:latest
+docker push ghcr.io/beejeex/cloudflare-ddns-ui:<version>
+docker push ghcr.io/beejeex/cloudflare-ddns-ui:latest
+```
+
+Do **not** push to `docker.io` (Docker Hub). The only registry in use is GHCR.
+
 ---
 
 ## UI Design System
