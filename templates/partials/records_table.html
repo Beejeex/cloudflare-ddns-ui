@@ -1,77 +1,118 @@
-{# partials/records_table.html
-   Responsibility: Renders the managed records table rows.
-   Returned as an HTMX fragment after add/remove/delete actions.
-   Target: #records-container (innerHTML swap).
-#}
-
+﻿{# partials/records_table.html - redesigned as record cards #}
 {% if records %}
-<table>
-  <thead>
-    <tr>
-      <th>Record</th>
-      <th>Cloudflare IP</th>
-      <th>CF Status</th>
-      <th>UniFi IP</th>
-      <th>Updates</th>
-      <th>Failures</th>
-      <th>Last Checked</th>
-      <th></th>
-    </tr>
-  </thead>
-  <tbody>
-    {% for r in records %}
-    <tr>
-      <td class="record-name font-mono">{{ r.name }}</td>
-      <td class="font-mono text-sm">{{ r.dns_ip }}</td>
-      <td>
-        {% if r.is_up_to_date is none %}
-          <span class="badge badge-neutral">Unknown</span>
-        {% elif r.is_up_to_date %}
-          <span class="badge badge-ok">Up to date</span>
-        {% else %}
-          <span class="badge badge-warning">Needs update</span>
-        {% endif %}
-      </td>
-      <td class="font-mono text-sm">
-        {% if r.unifi_ip %}
-          {{ r.unifi_ip }}
-        {% else %}
-          <span class="text-muted">—</span>
-        {% endif %}
-      </td>
-      <td class="text-sm">{{ r.updates }}</td>
-      <td class="text-sm">
-        {% if r.failures >= 3 %}
-          <span class="badge badge-error">{{ r.failures }}</span>
-        {% elif r.failures > 0 %}
-          <span class="badge badge-warning">{{ r.failures }}</span>
-        {% else %}
-          {{ r.failures }}
-        {% endif %}
-      </td>
-      <td class="text-sm text-muted">{{ r.last_checked or '—' }}</td>
-      <td>
-        <form hx-post="/remove-from-managed"
-              hx-target="#records-container"
-              hx-swap="innerHTML"
-              hx-confirm="Remove {{ r.name }} from managed records?"
-              hx-on:htmx:after-request="if(event.detail.successful) location.reload()"
-              style="display:inline">
-          <input type="hidden" name="record_name" value="{{ r.name }}">
-          <button type="submit" class="btn btn-ghost btn-sm">Remove</button>
-        </form>
-      </td>
-    </tr>
-    {% endfor %}
-  </tbody>
-</table>
-
-{% if error_message is defined and error_message %}
-<div class="alert alert-error mt-1">{{ error_message }}</div>
-{% endif %}
-
-{% else %}
-<div style="padding: 1.25rem; color: #94a3b8; font-size: 0.875rem;">
-  No records managed yet. Use the form below to create and manage records.
+{% for r in records %}
+<div class="record-card">
+  <div class="record-card-header">
+    <div style="display:flex; align-items:center; gap:0.6rem; flex:1; min-width:0; flex-wrap:wrap;">
+      <span class="record-name font-mono" style="font-size:0.9375rem;">{{ r.name }}</span>
+      {% if r.is_up_to_date is none %}<span class="badge badge-neutral">Unknown</span>
+      {% elif r.is_up_to_date %}<span class="badge badge-ok">&#10003; Up to date</span>
+      {% else %}<span class="badge badge-warning">&#8593; Needs update</span>
+      {% endif %}
+    </div>
+    <div class="text-sm text-muted" style="white-space:nowrap; flex-shrink:0;">
+      {{ r.updates }} update{{ 's' if r.updates != 1 else '' }} &middot;
+      {% if r.failures > 0 %}<span style="color:#dc2626;">{{ r.failures }} failure{{ 's' if r.failures != 1 else '' }}</span>
+      {% else %}0 failures{% endif %}
+      {% if r.last_checked %} &middot; checked {{ r.last_checked[:16] }}{% endif %}
+    </div>
+  </div>
+  <div class="record-card-ips">
+    <div class="record-ip-block">
+      <span class="record-ip-label">Cloudflare</span>
+      <span class="font-mono" style="font-size:0.875rem;">{{ r.dns_ip }}</span>
+    </div>
+    {% if r.unifi_ip or r.cfg_unifi_enabled %}
+    <div class="record-ip-block">
+      <span class="record-ip-label">UniFi</span>
+      {% if r.unifi_ip %}<span class="font-mono" style="font-size:0.875rem;">{{ r.unifi_ip }}</span>
+      {% else %}<span class="text-muted" style="font-size:0.8rem;">No policy yet</span>{% endif %}
+    </div>
+    {% endif %}
+  </div>
+  {% set slug = r.name | replace('.', '-') | replace('_', '-') %}
+  <form id="cfg-form-{{ slug }}"
+        hx-post="/update-record-config"
+        hx-target="#cfg-status-{{ slug }}"
+        hx-swap="innerHTML"
+        hx-trigger="change"
+        style="padding:0.875rem 1.25rem; border-top:1px solid #e2e8f0; display:flex; flex-wrap:wrap; gap:1.25rem; align-items:flex-start;">
+    <input type="hidden" name="record_name" value="{{ r.name }}">
+    <div class="record-cfg-section">
+      <label class="record-cfg-toggle">
+        <input type="checkbox" name="cf_enabled" value="on" {% if r.cfg_cf_enabled %}checked{% endif %}
+               onchange="toggleCfSection('{{ slug }}', this.checked)">
+        <span style="font-weight:600; color:#0284c7;">Cloudflare DDNS</span>
+      </label>
+      <div id="cf-section-{{ slug }}"
+           style="padding-left:1.5rem; display:flex; flex-direction:column; gap:0.4rem; margin-top:0.3rem; {% if not r.cfg_cf_enabled %}opacity:0.4; pointer-events:none;{% endif %}">
+        <div style="display:flex; gap:1rem;">
+          <label class="record-cfg-radio">
+            <input type="radio" name="ip_mode" value="dynamic" {% if r.cfg_ip_mode == 'dynamic' %}checked{% endif %}
+                   onchange="toggleStaticIp('{{ slug }}', false)">
+            <span>Dynamic <span class="text-muted" style="font-size:0.75rem;">(auto-detect)</span></span>
+          </label>
+          <label class="record-cfg-radio">
+            <input type="radio" name="ip_mode" value="static" {% if r.cfg_ip_mode == 'static' %}checked{% endif %}
+                   onchange="toggleStaticIp('{{ slug }}', true)">
+            <span>Static</span>
+          </label>
+        </div>
+        <div id="static-ip-wrap-{{ slug }}" style="display:{% if r.cfg_ip_mode == 'static' %}flex{% else %}none{% endif %}; align-items:center; gap:0.5rem;">
+          <label style="font-size:0.8rem; color:#475569; white-space:nowrap;">External IP</label>
+          <input type="text" name="static_ip" value="{{ r.cfg_static_ip }}" placeholder="203.0.113.1"
+                 style="width:150px; font-size:0.8125rem; padding:0.3rem 0.6rem; border:1px solid #cbd5e1; border-radius:0.375rem;">
+        </div>
+      </div>
+    </div>
+    <div class="record-cfg-section">
+      <label class="record-cfg-toggle">
+        <input type="checkbox" name="unifi_enabled" value="on" {% if r.cfg_unifi_enabled %}checked{% endif %}>
+        <span style="font-weight:600; color:#6d28d9;">UniFi DNS</span>
+      </label>
+      <div style="padding-left:1.5rem; margin-top:0.3rem;">
+        <span class="text-muted" style="font-size:0.75rem;">
+          {% if r.unifi_ip %}Synced: <span class="font-mono">{{ r.unifi_ip }}</span>
+          {% else %}Will create policy on next check{% endif %}
+        </span>
+      </div>
+    </div>
+    <div style="margin-left:auto; align-self:center;">
+      <span id="cfg-status-{{ slug }}" class="text-sm"></span>
+    </div>
+  </form>
+  <div class="record-card-actions">
+    {% if r.cf_record_id %}
+    <form hx-post="/delete-record" hx-target="#records-container" hx-swap="innerHTML"
+          hx-confirm="Delete {{ r.name }} from Cloudflare AND remove from managed? This cannot be undone."
+          hx-on:htmx:after-request="if(event.detail.successful) location.reload()" style="display:inline">
+      <input type="hidden" name="record_id" value="{{ r.cf_record_id }}">
+      <input type="hidden" name="record_name" value="{{ r.name }}">
+      <button type="submit" class="btn btn-danger btn-sm">Delete from CF</button>
+    </form>
+    {% endif %}
+    <form hx-post="/remove-from-managed" hx-target="#records-container" hx-swap="innerHTML"
+          hx-confirm="Remove {{ r.name }} from managed? DNS record stays in Cloudflare."
+          hx-on:htmx:after-request="if(event.detail.successful) location.reload()" style="display:inline">
+      <input type="hidden" name="record_name" value="{{ r.name }}">
+      <button type="submit" class="btn btn-ghost btn-sm">Remove</button>
+    </form>
+  </div>
 </div>
+{% endfor %}
+{% if error_message is defined and error_message %}
+<div style="background:#fee2e2; color:#991b1b; border:1px solid #fca5a5; padding:0.75rem 1.25rem; border-radius:0.375rem; margin:0.75rem 1.25rem; font-size:0.875rem;">{{ error_message }}</div>
+{% endif %}
+<script>
+function toggleCfSection(slug, enabled) {
+  var s = document.getElementById('cf-section-' + slug);
+  if (s) { s.style.opacity = enabled ? '' : '0.4'; s.style.pointerEvents = enabled ? '' : 'none'; }
+}
+function toggleStaticIp(slug, show) {
+  var w = document.getElementById('static-ip-wrap-' + slug);
+  if (w) { w.style.display = show ? 'flex' : 'none'; }
+}
+</script>
+{% else %}
+<div style="padding:1.5rem 1.25rem; color:#94a3b8; font-size:0.875rem;">No records managed yet. Use the form below to create and manage records.</div>
 {% endif %}

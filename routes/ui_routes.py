@@ -18,11 +18,13 @@ from dependencies import (
     get_dns_service,
     get_kubernetes_service,
     get_log_service,
+    get_record_config_repo,
     get_stats_service,
     get_unifi_client,
 )
 from exceptions import DnsProviderError, IpFetchError, KubernetesError, UnifiProviderError
 from cloudflare.unifi_client import UnifiClient
+from repositories.record_config_repository import RecordConfigRepository
 from services.config_service import ConfigService
 from services.dns_service import DnsService
 from services.kubernetes_service import KubernetesService
@@ -43,6 +45,7 @@ async def dashboard(
     stats_service: StatsService = Depends(get_stats_service),
     kubernetes_service: KubernetesService = Depends(get_kubernetes_service),
     unifi_client: UnifiClient = Depends(get_unifi_client),
+    record_config_repo: RecordConfigRepository = Depends(get_record_config_repo),
 ) -> HTMLResponse:
     """
     Renders the main DDNS dashboard page.
@@ -65,6 +68,9 @@ async def dashboard(
     config = await config_service.get_config()
     zones = await config_service.get_zones()
     managed_records = await config_service.get_managed_records()
+
+    # Load all per-record settings up front in one query
+    record_configs = record_config_repo.get_all(managed_records)
 
     # Fetch current public IP — display "Unavailable" on failure rather than 500
     current_ip = "Unavailable"
@@ -110,9 +116,11 @@ async def dashboard(
 
         # NOTE: Match unified policy by domain name from the pre-fetched map
         unifi_policy = unifi_policy_map.get(record_name)
+        rc = record_configs.get(record_name)
 
         record_data.append({
             "name": record_name,
+            "cf_record_id": dns_record.id if dns_record else None,
             "dns_ip": dns_ip,
             "is_up_to_date": is_up_to_date,
             "updates": stats.updates if stats else 0,
@@ -121,6 +129,11 @@ async def dashboard(
             "last_updated": stats.last_updated.isoformat() if stats and stats.last_updated else None,
             "unifi_ip": unifi_policy.content if unifi_policy else None,
             "unifi_record_id": unifi_policy.id if unifi_policy else None,
+            # Per-record settings (from RecordConfig, defaults if no row exists)
+            "cfg_cf_enabled": rc.cf_enabled if rc else True,
+            "cfg_ip_mode": rc.ip_mode if rc else "dynamic",
+            "cfg_static_ip": rc.static_ip if rc else "",
+            "cfg_unifi_enabled": rc.unifi_enabled if rc else False,
         })
 
     # Discover hostnames from Kubernetes Ingress resources (optional feature)
@@ -152,6 +165,7 @@ async def dashboard(
         discovery_records.append({
             "name": r.name,
             "source": "cloudflare",
+            "cf_record_id": r.id,
             "ip": r.content,
             "proxied": r.proxied,
             "namespace": None,

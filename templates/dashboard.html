@@ -112,7 +112,7 @@
 </div>
 
 {# -------------------------------------------------------------------------
-   Available Records — Cloudflare zone A-records and K8s Ingress hostnames
+   Available Records — compact card grid
 ------------------------------------------------------------------------- #}
 <div class="card mb-2">
   <div class="card-header">
@@ -122,50 +122,46 @@
     </span>
   </div>
 
-  {# Error banners inside the panel #}
+  {# Error banners #}
   {% if zone_records_error %}
-  <div style="padding:0.75rem 1.25rem; background:#fef3c7; border-bottom:1px solid #fde68a; color:#92400e; font-size:0.8125rem;">
-    &#9888; Cloudflare zone fetch failed &mdash; {{ zone_records_error }}
+  <div style="padding:0.5rem 1.25rem; background:#fef3c7; border-bottom:1px solid #fde68a; color:#92400e; font-size:0.8rem;">
+    &#9888; Cloudflare: {{ zone_records_error }}
   </div>
   {% endif %}
   {% if k8s_error %}
-  <div style="padding:0.75rem 1.25rem; background:#fef3c7; border-bottom:1px solid #fde68a; color:#92400e; font-size:0.8125rem;">
-    &#9888; Kubernetes discovery failed &mdash; {{ k8s_error }}
+  <div style="padding:0.5rem 1.25rem; background:#fef3c7; border-bottom:1px solid #fde68a; color:#92400e; font-size:0.8rem;">
+    &#9888; Kubernetes: {{ k8s_error }}
   </div>
   {% endif %}
 
   {% if discovery_records %}
-  <table>
-    <thead>
-      <tr>
-        <th>Hostname</th>
-        <th>Source</th>
-        <th>IP</th>
-        <th>Info</th>
-        <th></th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for r in discovery_records %}
-      <tr>
-        <td class="record-name font-mono">{{ r.name }}</td>
-        <td>
-          {% if r.source == 'cloudflare' %}
-            <span class="badge badge-cf">CF</span>
+  <div class="discovery-grid">
+    {% for r in discovery_records %}
+    <div class="discovery-card{% if r.name in managed_names %} discovery-card-managed{% endif %}">
+      <div class="discovery-card-top">
+        {% if r.source == 'cloudflare' %}
+          <span class="badge badge-cf" style="font-size:0.7rem;">CF</span>
+        {% else %}
+          <span class="badge badge-k8s" style="font-size:0.7rem;">K8s</span>
+        {% endif %}
+        {% if r.source == 'cloudflare' %}
+          {% if r.proxied %}
+            <span class="badge badge-ok" style="font-size:0.7rem;">Proxied</span>
           {% else %}
-            <span class="badge badge-k8s">K8s</span>
+            <span class="badge badge-neutral" style="font-size:0.7rem;">DNS only</span>
           {% endif %}
-        </td>
-        <td class="font-mono text-sm">{{ r.ip or '&mdash;' }}</td>
-        <td class="text-sm text-muted">
-          {% if r.source == 'cloudflare' %}
-            {% if r.proxied %}<span class="badge badge-ok" style="font-size:0.7rem;">Proxied</span>{% else %}<span class="badge badge-neutral" style="font-size:0.7rem;">DNS only</span>{% endif %}
-          {% else %}
-            {{ r.namespace }} &nbsp;/&nbsp; {{ r.ingress_name }}
-          {% endif %}
-        </td>
-        <td>
-          {% if r.name not in managed_names %}
+        {% endif %}
+      </div>
+      <div class="discovery-card-name font-mono">{{ r.name }}</div>
+      <div class="discovery-card-meta text-muted">
+        {% if r.source == 'cloudflare' %}
+          <span class="font-mono">{{ r.ip }}</span>
+        {% else %}
+          {{ r.namespace }} / {{ r.ingress_name }}
+        {% endif %}
+      </div>
+      <div class="discovery-card-actions">
+        {% if r.name not in managed_names %}
           <form hx-post="/add-to-managed"
                 hx-target="#records-container"
                 hx-swap="innerHTML"
@@ -174,14 +170,25 @@
             <input type="hidden" name="record_name" value="{{ r.name }}">
             <button type="submit" class="btn btn-primary btn-sm">+ Manage</button>
           </form>
-          {% else %}
-          <span class="badge badge-ok">Managed</span>
+          {% if r.source == 'cloudflare' and r.cf_record_id %}
+          <form hx-post="/delete-record"
+                hx-target="#records-container"
+                hx-swap="innerHTML"
+                hx-confirm="Delete {{ r.name }} from Cloudflare? This cannot be undone."
+                hx-on:htmx:after-request="if(event.detail.successful) location.reload()"
+                style="display:inline">
+            <input type="hidden" name="record_id" value="{{ r.cf_record_id }}">
+            <input type="hidden" name="record_name" value="{{ r.name }}">
+            <button type="submit" class="btn btn-danger btn-sm">Delete</button>
+          </form>
           {% endif %}
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+        {% else %}
+          <span class="badge badge-ok" style="font-size:0.75rem;">&#10003; Managed</span>
+        {% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
   {% else %}
   <div class="card-body"><span class="text-muted text-sm">No records discovered yet.</span></div>
   {% endif %}

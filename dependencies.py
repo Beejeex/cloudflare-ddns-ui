@@ -17,6 +17,7 @@ from cloudflare.dns_provider import DNSProvider
 from cloudflare.unifi_client import UnifiClient
 from db.database import get_session
 from repositories.config_repository import ConfigRepository
+from repositories.record_config_repository import RecordConfigRepository
 from repositories.stats_repository import StatsRepository
 from services.config_service import ConfigService
 from services.dns_service import DnsService
@@ -91,6 +92,21 @@ def get_stats_repo(session: Session = Depends(get_session)) -> StatsRepository:
         A StatsRepository instance.
     """
     return StatsRepository(session)
+
+
+def get_record_config_repo(
+    session: Session = Depends(get_session),
+) -> RecordConfigRepository:
+    """
+    Provides a RecordConfigRepository for the current request's DB session.
+
+    Args:
+        session: The DB session injected by get_session.
+
+    Returns:
+        A RecordConfigRepository instance.
+    """
+    return RecordConfigRepository(session)
 
 
 # ---------------------------------------------------------------------------

@@ -91,6 +91,42 @@ class RecordStats(SQLModel, table=True):
 
 
 # ---------------------------------------------------------------------------
+# RecordConfig — per-DNS-record behaviour settings
+# ---------------------------------------------------------------------------
+
+
+class RecordConfig(SQLModel, table=True):
+    """
+    Stores per-record DDNS behaviour settings.
+
+    One optional row per managed FQDN. When no row exists the application
+    uses sensible defaults (Cloudflare enabled, dynamic IP mode, UniFi off).
+
+    Collaborators:
+        - RecordConfigRepository: reads and writes these rows
+        - DnsService: reads cf_enabled/ip_mode to decide how to update
+    """
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    # Fully-qualified DNS name this config belongs to
+    record_name: str = Field(unique=True, index=True)
+
+    # Whether Cloudflare DDNS updates are active for this record
+    cf_enabled: bool = Field(default=True)
+
+    # "dynamic" — always use the current public IP detected by IpService
+    # "static"  — always use static_ip, never auto-update
+    ip_mode: str = Field(default="dynamic")
+
+    # The fixed external IP to use when ip_mode == "static"
+    static_ip: str = Field(default="")
+
+    # Whether this record is also pushed to UniFi DNS policies
+    unifi_enabled: bool = Field(default=False)
+
+
+# ---------------------------------------------------------------------------
 # LogEntry — persistent DDNS log entries shown in the UI log panel
 # ---------------------------------------------------------------------------
 
