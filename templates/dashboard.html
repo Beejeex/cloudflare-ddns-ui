@@ -112,53 +112,56 @@
 </div>
 
 {# -------------------------------------------------------------------------
-   Kubernetes Ingress Records — auto-discovered hostnames from cluster
+   Available Records — Cloudflare zone A-records and K8s Ingress hostnames
 ------------------------------------------------------------------------- #}
-{% if k8s_records is defined %}
 <div class="card mb-2">
   <div class="card-header">
-    <span class="card-title">Cluster Ingress Records</span>
+    <span class="card-title">Available Records</span>
     <span style="font-size:0.75rem; color:#64748b;">
-      {{ k8s_records | length }} hostname{{ 's' if k8s_records | length != 1 else '' }} discovered
+      {{ discovery_records | length }} record{{ 's' if discovery_records | length != 1 else '' }}
     </span>
   </div>
-  <div class="card-body">
-    {% include "partials/k8s_records_table.html" %}
-  </div>
-</div>
-{% endif %}
 
-{# -------------------------------------------------------------------------
-   Cloudflare Zone A-Records — all A records in the zone
-------------------------------------------------------------------------- #}
-{% if not api_error %}
-<div class="card mb-2">
-  <div class="card-header">
-    <span class="card-title">Cloudflare Zone A-Records</span>
-    <span style="font-size:0.75rem; color:#64748b;">
-      {{ zone_records | length }} record{{ 's' if zone_records | length != 1 else '' }}
-    </span>
+  {# Error banners inside the panel #}
+  {% if zone_records_error %}
+  <div style="padding:0.75rem 1.25rem; background:#fef3c7; border-bottom:1px solid #fde68a; color:#92400e; font-size:0.8125rem;">
+    &#9888; Cloudflare zone fetch failed &mdash; {{ zone_records_error }}
   </div>
-  {% if zone_records %}
+  {% endif %}
+  {% if k8s_error %}
+  <div style="padding:0.75rem 1.25rem; background:#fef3c7; border-bottom:1px solid #fde68a; color:#92400e; font-size:0.8125rem;">
+    &#9888; Kubernetes discovery failed &mdash; {{ k8s_error }}
+  </div>
+  {% endif %}
+
+  {% if discovery_records %}
   <table>
     <thead>
       <tr>
         <th>Hostname</th>
+        <th>Source</th>
         <th>IP</th>
-        <th>Proxied</th>
+        <th>Info</th>
         <th></th>
       </tr>
     </thead>
     <tbody>
-      {% for r in zone_records %}
+      {% for r in discovery_records %}
       <tr>
         <td class="record-name font-mono">{{ r.name }}</td>
-        <td class="font-mono text-sm">{{ r.content }}</td>
         <td>
-          {% if r.proxied %}
-            <span class="badge badge-ok">Proxied</span>
+          {% if r.source == 'cloudflare' %}
+            <span class="badge badge-cf">CF</span>
           {% else %}
-            <span class="badge badge-neutral">DNS only</span>
+            <span class="badge badge-k8s">K8s</span>
+          {% endif %}
+        </td>
+        <td class="font-mono text-sm">{{ r.ip or '&mdash;' }}</td>
+        <td class="text-sm text-muted">
+          {% if r.source == 'cloudflare' %}
+            {% if r.proxied %}<span class="badge badge-ok" style="font-size:0.7rem;">Proxied</span>{% else %}<span class="badge badge-neutral" style="font-size:0.7rem;">DNS only</span>{% endif %}
+          {% else %}
+            {{ r.namespace }} &nbsp;/&nbsp; {{ r.ingress_name }}
           {% endif %}
         </td>
         <td>
@@ -179,17 +182,10 @@
       {% endfor %}
     </tbody>
   </table>
-  {% elif zone_records_error %}
-  <div class="card-body">
-    <span class="text-muted text-sm">{{ zone_records_error }}</span>
-  </div>
   {% else %}
-  <div class="card-body">
-    <span class="text-muted text-sm">No A-records found in zone.</span>
-  </div>
+  <div class="card-body"><span class="text-muted text-sm">No records discovered yet.</span></div>
   {% endif %}
 </div>
-{% endif %}
 
 {% endblock %}
 

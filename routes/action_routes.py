@@ -51,6 +51,7 @@ async def update_config(
     unifi_host: str = Form(""),
     unifi_api_key: str = Form(""),
     unifi_site_id: str = Form(""),
+    unifi_default_ip: str = Form(""),
     unifi_enabled: bool = Form(False),
     config_service: ConfigService = Depends(get_config_service),
     log_service: LogService = Depends(get_log_service),
@@ -93,6 +94,7 @@ async def update_config(
         unifi_host=unifi_host,
         unifi_api_key=unifi_api_key,
         unifi_site_id=unifi_site_id,
+        unifi_default_ip=unifi_default_ip,
         unifi_enabled=unifi_enabled,
     )
 

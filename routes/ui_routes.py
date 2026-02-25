@@ -86,7 +86,7 @@ async def dashboard(
     # Fetch all UniFi DNS policies in one call upfront (avoid N per-record requests)
     unifi_error: str | None = None
     unifi_policy_map: dict[str, object] = {}
-    _, _, unifi_site_id, unifi_enabled = await config_service.get_unifi_config()
+    _, _, unifi_site_id, _, unifi_enabled = await config_service.get_unifi_config()
     if unifi_enabled and unifi_client.is_configured() and unifi_site_id:
         try:
             policies = await unifi_client.list_records(unifi_site_id)
@@ -133,7 +133,7 @@ async def dashboard(
             logger.warning("Kubernetes ingress discovery failed: %s", exc)
             k8s_error = str(exc)
 
-    # Fetch all A-records in the zone for the zone panel (read-only overview)
+    # Fetch all A-records in the zone for the discovery panel
     zone_records: list = []
     zone_records_error: str | None = None
     if not api_error:
@@ -143,6 +143,32 @@ async def dashboard(
             logger.warning("Could not fetch zone records: %s", exc)
             zone_records_error = str(exc)
 
+    # Build unified discovery list: CF records first, then K8s-only hostnames
+    # Each entry carries a "source" key so the template can render a badge.
+    discovery_records: list[dict] = []
+    cf_names: set[str] = set()
+    for r in zone_records:
+        cf_names.add(r.name)
+        discovery_records.append({
+            "name": r.name,
+            "source": "cloudflare",
+            "ip": r.content,
+            "proxied": r.proxied,
+            "namespace": None,
+            "ingress_name": None,
+        })
+    for r in k8s_records:
+        # NOTE: Only add K8s entries that are not already represented in the CF zone.
+        if r.hostname not in cf_names:
+            discovery_records.append({
+                "name": r.hostname,
+                "source": "k8s",
+                "ip": None,
+                "proxied": False,
+                "namespace": r.namespace,
+                "ingress_name": r.ingress_name,
+            })
+
     return templates.TemplateResponse(
         request,
         "dashboard.html",
@@ -151,13 +177,12 @@ async def dashboard(
             "records": record_data,
             "interval": config.interval,
             "api_error": api_error,
-            "k8s_records": k8s_records,
-            "k8s_error": k8s_error,
             "managed_names": managed_records,
             "unifi_enabled": unifi_enabled,
             "unifi_error": unifi_error,
-            "zone_records": zone_records,
+            "discovery_records": discovery_records,
             "zone_records_error": zone_records_error,
+            "k8s_error": k8s_error,
         },
     )
 
@@ -210,7 +235,7 @@ async def settings_page(
     config = await config_service.get_config()
     zones = await config_service.get_zones()
     refresh = await config_service.get_refresh_interval()
-    unifi_host, unifi_api_key, unifi_site_id, unifi_enabled = await config_service.get_unifi_config()
+    unifi_host, unifi_api_key, unifi_site_id, unifi_default_ip, unifi_enabled = await config_service.get_unifi_config()
     return templates.TemplateResponse(
         request,
         "settings.html",
@@ -223,6 +248,7 @@ async def settings_page(
             "unifi_host": unifi_host,
             "unifi_api_key": unifi_api_key,
             "unifi_site_id": unifi_site_id,
+            "unifi_default_ip": unifi_default_ip,
             "unifi_enabled": unifi_enabled,
         },
     )

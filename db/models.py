@@ -57,6 +57,9 @@ class AppConfig(SQLModel, table=True):
     # Hostname or IP of the local UniFi Network Application (e.g. 192.168.1.1)
     unifi_host: str = Field(default="")
 
+    # Default internal IPv4 used when creating new UniFi DNS policies from the dashboard
+    unifi_default_ip: str = Field(default="")
+
     # Whether UniFi internal DNS management is enabled (off by default)
     unifi_enabled: bool = Field(default=False)
 

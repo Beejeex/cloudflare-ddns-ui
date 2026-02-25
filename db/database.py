@@ -100,6 +100,11 @@ def _run_migrations() -> None:
                 "ALTER TABLE appconfig ADD COLUMN unifi_host TEXT NOT NULL DEFAULT ''"
             )
             logger.info("Migration: added 'unifi_host' column to appconfig table.")
+        if "unifi_default_ip" not in existing:
+            conn.exec_driver_sql(
+                "ALTER TABLE appconfig ADD COLUMN unifi_default_ip TEXT NOT NULL DEFAULT ''"
+            )
+            logger.info("Migration: added 'unifi_default_ip' column to appconfig table.")
         if "unifi_enabled" not in existing:
             conn.exec_driver_sql(
                 "ALTER TABLE appconfig ADD COLUMN unifi_enabled INTEGER NOT NULL DEFAULT 0"

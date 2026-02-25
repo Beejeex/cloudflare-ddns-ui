@@ -151,6 +151,14 @@ subjects:
         </div>
       </div>
 
+      <div class="form-group" style="margin-top:0.75rem;">
+        <label for="unifi_default_ip">Default Internal IP</label>
+        <input type="text" id="unifi_default_ip" name="unifi_default_ip"
+               value="{{ unifi_default_ip }}" autocomplete="off"
+               placeholder="172.20.9.100">
+        <small>Pre-filled when creating new UniFi DNS policies from the dashboard (e.g. your ingress load-balancer IP).</small>
+      </div>
+
       <div style="margin-top:1.5rem;">
         <button type="submit" class="btn btn-primary w-full">Save Settings</button>
       </div>
