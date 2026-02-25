@@ -22,7 +22,7 @@
       <span class="record-ip-label">Cloudflare</span>
       <span class="font-mono" style="font-size:0.875rem;">{{ r.dns_ip }}</span>
     </div>
-    {% if r.unifi_ip or r.cfg_unifi_enabled %}
+    {% if unifi_enabled and (r.unifi_ip or r.cfg_unifi_enabled) %}
     <div class="record-ip-block">
       <span class="record-ip-label">UniFi</span>
       {% if r.unifi_ip %}<span class="font-mono" style="font-size:0.875rem;">{{ r.unifi_ip }}</span>
@@ -65,6 +65,7 @@
         </div>
       </div>
     </div>
+    {% if unifi_enabled %}
     <div class="record-cfg-section">
       <label class="record-cfg-toggle">
         <input type="checkbox" name="unifi_enabled" value="on" {% if r.cfg_unifi_enabled %}checked{% endif %}>
@@ -77,6 +78,7 @@
         </span>
       </div>
     </div>
+    {% endif %}
     <div style="margin-left:auto; align-self:center;">
       <span id="cfg-status-{{ slug }}" class="text-sm"></span>
     </div>
