@@ -20,9 +20,11 @@ from dependencies import (
     get_config_service,
     get_dns_service,
     get_log_service,
+    get_record_config_repo,
     get_stats_service,
 )
 from exceptions import DnsProviderError
+from repositories.record_config_repository import RecordConfigRepository
 from scheduler import reschedule
 from services.config_service import ConfigService
 from services.dns_service import DnsService
@@ -47,11 +49,18 @@ async def update_config(
     zones: str = Form(...),
     refresh: int = Form(30),
     interval: int = Form(300),
+    k8s_enabled: bool = Form(False),
+    unifi_host: str = Form(""),
+    unifi_api_key: str = Form(""),
+    unifi_site_id: str = Form(""),
+    unifi_default_ip: str = Form(""),
+    unifi_enabled: bool = Form(False),
     config_service: ConfigService = Depends(get_config_service),
     log_service: LogService = Depends(get_log_service),
 ) -> HTMLResponse:
     """
-    Saves new Cloudflare credentials and timing configuration.
+    Saves new Cloudflare credentials, timing configuration, Kubernetes
+    discovery toggle, and UniFi integration settings.
 
     HTMX swaps the returned fragment into #config-status on the page.
 
@@ -61,6 +70,11 @@ async def update_config(
         zones: JSON string of base-domain-to-zone-ID mapping.
         refresh: UI auto-refresh interval in seconds.
         interval: Background DDNS check interval in seconds.
+        k8s_enabled: Whether Kubernetes Ingress discovery is enabled.
+        unifi_host: Hostname or IP of the local UniFi Network Application.
+        unifi_api_key: UniFi API key with DNS write access.
+        unifi_site_id: UniFi site UUID.
+        unifi_enabled: Whether UniFi internal DNS management is enabled.
         config_service: Saves the new configuration.
         log_service: Writes a UI log entry on success.
 
@@ -78,6 +92,12 @@ async def update_config(
         zones=zones_dict,
         refresh=refresh,
         interval=interval,
+        k8s_enabled=k8s_enabled,
+        unifi_host=unifi_host,
+        unifi_api_key=unifi_api_key,
+        unifi_site_id=unifi_site_id,
+        unifi_default_ip=unifi_default_ip,
+        unifi_enabled=unifi_enabled,
     )
 
     # Reschedule the background job with the new interval
@@ -101,6 +121,50 @@ async def update_config(
 # ---------------------------------------------------------------------------
 
 
+def _build_record_rows(
+    records: list[str],
+    stats_by_name: dict,
+    cfgs: dict,
+) -> list[dict]:
+    """
+    Builds the list of record dicts needed by partials/records_table.html.
+
+    Used by add/remove/delete handlers which cannot perform live CF/UniFi API
+    calls mid-action. Live IP fields are left as placeholders; the full
+    dashboard page load fills them in.
+
+    Args:
+        records: List of managed FQDNs.
+        stats_by_name: Dict mapping FQDN → RecordStats row (may be incomplete).
+        cfgs: Dict mapping FQDN → RecordConfig (defaults filled in by repo).
+
+    Returns:
+        A list of dicts matching the template's expected record shape.
+    """
+    rows = []
+    for r in records:
+        s = stats_by_name.get(r)
+        cfg = cfgs.get(r)
+        rows.append({
+            "name": r,
+            "cf_record_id": None,       # NOTE: not available without a live CF call
+            "dns_ip": "—",
+            "is_up_to_date": None,
+            "updates": s.updates if s else 0,
+            "failures": s.failures if s else 0,
+            "last_checked": s.last_checked.isoformat() if s and s.last_checked else None,
+            "last_updated": s.last_updated.isoformat() if s and s.last_updated else None,
+            "unifi_ip": None,
+            "unifi_record_id": None,
+            "cfg_cf_enabled": cfg.cf_enabled if cfg else True,
+            "cfg_ip_mode": cfg.ip_mode if cfg else "dynamic",
+            "cfg_static_ip": cfg.static_ip if cfg else "",
+            "cfg_unifi_enabled": cfg.unifi_enabled if cfg else False,
+            "cfg_unifi_static_ip": cfg.unifi_static_ip if cfg else "",
+        })
+    return rows
+
+
 @router.post("/add-to-managed", response_class=HTMLResponse)
 async def add_to_managed(
     request: Request,
@@ -108,11 +172,12 @@ async def add_to_managed(
     config_service: ConfigService = Depends(get_config_service),
     log_service: LogService = Depends(get_log_service),
     stats_service: StatsService = Depends(get_stats_service),
+    record_config_repo: RecordConfigRepository = Depends(get_record_config_repo),
 ) -> HTMLResponse:
     """
     Adds a DNS record to the managed list and returns an updated records table.
 
-    HTMX swaps the returned fragment into #records-table on the page.
+    HTMX swaps the returned fragment into #records-container on the page.
 
     Args:
         request: The incoming FastAPI request.
@@ -120,6 +185,7 @@ async def add_to_managed(
         config_service: Mutates the managed-records list.
         log_service: Writes a UI log entry on success.
         stats_service: Provides current stats for the rendered table.
+        record_config_repo: Provides per-record settings for each row.
 
     Returns:
         An HTMLResponse containing the records-table partial fragment.
@@ -131,23 +197,16 @@ async def add_to_managed(
     records = await config_service.get_managed_records()
     all_stats = await stats_service.get_all()
     stats_by_name = {s.record_name: s for s in all_stats}
+    cfgs = record_config_repo.get_all(records)
+    _, _, _, unifi_default_ip, unifi_enabled = await config_service.get_unifi_config()
 
     return templates.TemplateResponse(
         request,
         "partials/records_table.html",
         {
-            "records": [
-                {
-                    "name": r,
-                    "dns_ip": "—",
-                    "is_up_to_date": None,
-                    "updates": stats_by_name[r].updates if r in stats_by_name else 0,
-                    "failures": stats_by_name[r].failures if r in stats_by_name else 0,
-                    "last_checked": None,
-                    "last_updated": None,
-                }
-                for r in records
-            ],
+            "records": _build_record_rows(records, stats_by_name, cfgs),
+            "unifi_enabled": unifi_enabled,
+            "unifi_default_ip": unifi_default_ip,
         },
     )
 
@@ -159,6 +218,7 @@ async def remove_from_managed(
     config_service: ConfigService = Depends(get_config_service),
     stats_service: StatsService = Depends(get_stats_service),
     log_service: LogService = Depends(get_log_service),
+    record_config_repo: RecordConfigRepository = Depends(get_record_config_repo),
 ) -> HTMLResponse:
     """
     Removes a DNS record from the managed list and returns an updated records table.
@@ -179,28 +239,22 @@ async def remove_from_managed(
     removed = await config_service.remove_managed_record(record_name)
     if removed:
         await stats_service.delete_for_record(record_name)
+        record_config_repo.delete(record_name)
         log_service.log(f"Removed '{record_name}' from managed records.", level="INFO")
 
     records = await config_service.get_managed_records()
     all_stats = await stats_service.get_all()
     stats_by_name = {s.record_name: s for s in all_stats}
+    cfgs = record_config_repo.get_all(records)
+    _, _, _, unifi_default_ip, unifi_enabled = await config_service.get_unifi_config()
 
     return templates.TemplateResponse(
         request,
         "partials/records_table.html",
         {
-            "records": [
-                {
-                    "name": r,
-                    "dns_ip": "—",
-                    "is_up_to_date": None,
-                    "updates": stats_by_name[r].updates if r in stats_by_name else 0,
-                    "failures": stats_by_name[r].failures if r in stats_by_name else 0,
-                    "last_checked": None,
-                    "last_updated": None,
-                }
-                for r in records
-            ],
+            "records": _build_record_rows(records, stats_by_name, cfgs),
+            "unifi_enabled": unifi_enabled,
+            "unifi_default_ip": unifi_default_ip,
         },
     )
 
@@ -214,6 +268,7 @@ async def delete_record(
     dns_service: DnsService = Depends(get_dns_service),
     stats_service: StatsService = Depends(get_stats_service),
     log_service: LogService = Depends(get_log_service),
+    record_config_repo: RecordConfigRepository = Depends(get_record_config_repo),
 ) -> HTMLResponse:
     """
     Deletes a DNS A-record from Cloudflare and removes it from the managed list.
@@ -239,6 +294,7 @@ async def delete_record(
         await dns_service.delete_dns_record(record_id=record_id, record_name=record_name, zones=zones)
         await config_service.remove_managed_record(record_name)
         await stats_service.delete_for_record(record_name)
+        record_config_repo.delete(record_name)
         log_service.log(f"Deleted DNS record: {record_name}", level="INFO")
     except DnsProviderError as exc:
         error_message = str(exc)
@@ -248,25 +304,71 @@ async def delete_record(
     records = await config_service.get_managed_records()
     all_stats = await stats_service.get_all()
     stats_by_name = {s.record_name: s for s in all_stats}
+    cfgs = record_config_repo.get_all(records)
+    _, _, _, unifi_default_ip, unifi_enabled = await config_service.get_unifi_config()
 
     return templates.TemplateResponse(
         request,
         "partials/records_table.html",
         {
-            "records": [
-                {
-                    "name": r,
-                    "dns_ip": "—",
-                    "is_up_to_date": None,
-                    "updates": stats_by_name[r].updates if r in stats_by_name else 0,
-                    "failures": stats_by_name[r].failures if r in stats_by_name else 0,
-                    "last_checked": None,
-                    "last_updated": None,
-                }
-                for r in records
-            ],
+            "records": _build_record_rows(records, stats_by_name, cfgs),
+            "unifi_enabled": unifi_enabled,
+            "unifi_default_ip": unifi_default_ip,
             "error_message": error_message,
         },
+    )
+
+
+# ---------------------------------------------------------------------------
+# Per-record settings
+# ---------------------------------------------------------------------------
+
+
+@router.post("/update-record-config", response_class=HTMLResponse)
+async def update_record_config(
+    request: Request,
+    record_name: str = Form(...),
+    cf_enabled: str = Form(default="off"),
+    ip_mode: str = Form(default="dynamic"),
+    static_ip: str = Form(default=""),
+    unifi_enabled: str = Form(default="off"),
+    unifi_static_ip: str = Form(default=""),
+    record_config_repo: RecordConfigRepository = Depends(get_record_config_repo),
+    log_service: LogService = Depends(get_log_service),
+) -> HTMLResponse:
+    """
+    Saves per-record DDNS behaviour settings and returns an updated mini-status fragment.
+
+    Checkboxes submit "on" when checked and are absent when unchecked, so
+    cf_enabled/unifi_enabled are received as strings and normalised to bools here.
+
+    Args:
+        request: The incoming FastAPI request.
+        record_name: The FQDN whose config is being saved.
+        cf_enabled: "on" when the Cloudflare checkbox is checked.
+        ip_mode: "dynamic" or "static".
+        static_ip: The fixed external IP (only used when ip_mode is "static").
+        unifi_enabled: "on" when the UniFi checkbox is checked.
+        record_config_repo: Reads and writes RecordConfig rows.
+        log_service: Writes a UI log entry on save.
+
+    Returns:
+        An HTMLResponse containing an inline save-confirmation snippet.
+    """
+    cfg = record_config_repo.get(record_name)
+    cfg.cf_enabled = cf_enabled == "on"
+    cfg.ip_mode = ip_mode if ip_mode in ("dynamic", "static") else "dynamic"
+    cfg.static_ip = static_ip.strip()
+    cfg.unifi_enabled = unifi_enabled == "on"
+    cfg.unifi_static_ip = unifi_static_ip.strip()
+    record_config_repo.save(cfg)
+    log_service.log(
+        f"Updated config for '{record_name}': cf={cfg.cf_enabled} "
+        f"mode={cfg.ip_mode} unifi={cfg.unifi_enabled}",
+        level="INFO",
+    )
+    return HTMLResponse(
+        '<span class="badge badge-ok" style="font-size:0.7rem;">Saved ✓</span>'
     )
 
 

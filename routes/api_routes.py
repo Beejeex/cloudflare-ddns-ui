@@ -10,16 +10,19 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, Request
+import httpx
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse
 from fastapi.templating import Jinja2Templates
 
+from cloudflare.unifi_client import UnifiClient
 from dependencies import (
     get_config_service,
     get_log_service,
     get_stats_service,
+    get_unifi_http_client,
 )
-from exceptions import IpFetchError
+from exceptions import IpFetchError, UnifiProviderError
 from services.config_service import ConfigService
 from services.log_service import LogService
 from services.stats_service import StatsService
@@ -114,6 +117,41 @@ async def current_ip(request: Request) -> str:
         return "Unavailable"
 
 
+@router.get("/unifi/sites", response_class=HTMLResponse)
+async def get_unifi_sites(
+    request: Request,
+    unifi_host: str = Query(default="", alias="unifi_host"),
+    unifi_api_key: str = Query(default="", alias="unifi_api_key"),
+    http_client: httpx.AsyncClient = Depends(get_unifi_http_client),
+) -> HTMLResponse:
+    """
+    Queries the UniFi controller for all available sites and returns an HTML
+    partial so the settings page can auto-fill or show a picker for the Site ID.
+
+    Accepts the host and api_key as query parameters so the user does not need
+    to save settings first.
+
+    Args:
+        unifi_host: UniFi controller host (IP or hostname).
+        unifi_api_key: UniFi API key.
+        http_client: Shared async client with verify=False.
+
+    Returns:
+        HTML partial rendered from partials/unifi_sites.html.
+    """
+    context: dict = {"request": request, "sites": [], "error": None}
+    if not unifi_host or not unifi_api_key:
+        context["error"] = "Enter a host and API key first."
+    else:
+        client = UnifiClient(http_client=http_client, api_key=unifi_api_key, host=unifi_host)
+        try:
+            context["sites"] = await client.list_sites()
+        except UnifiProviderError as exc:
+            logger.warning("UniFi site discovery failed: %s", exc)
+            context["error"] = str(exc)
+    return templates.TemplateResponse("partials/unifi_sites.html", context)
+
+
 @router.get("/health/json")
 async def health_json() -> dict:
     """
@@ -123,3 +161,42 @@ async def health_json() -> dict:
         A dict with a "status" key set to "ok".
     """
     return {"status": "ok"}
+
+
+@router.get("/next-check-in")
+async def next_check_in(request: Request) -> dict:
+    """
+    Returns the seconds remaining until the next scheduled DDNS check.
+
+    Reads the live next_run_time from APScheduler so the dashboard countdown
+    stays accurate across page refreshes.
+
+    Args:
+        request: The incoming FastAPI request.
+
+    Returns:
+        A dict with "seconds" (int) and "interval" (int) keys.
+    """
+    from datetime import datetime, timezone
+    from repositories.config_repository import ConfigRepository
+    from db.database import engine
+    from sqlmodel import Session
+
+    interval = 300
+    try:
+        with Session(engine) as session:
+            interval = ConfigRepository(session).load().interval
+    except Exception:
+        pass
+
+    seconds_remaining = interval
+    try:
+        scheduler = request.app.state.scheduler
+        job = scheduler.get_job("ddns_check")
+        if job and job.next_run_time:
+            delta = job.next_run_time - datetime.now(timezone.utc)
+            seconds_remaining = max(0, int(delta.total_seconds()))
+    except Exception as exc:
+        logger.debug("Could not read scheduler next_run_time: %s", exc)
+
+    return {"seconds": seconds_remaining, "interval": interval}

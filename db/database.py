@@ -39,7 +39,8 @@ engine = create_engine(
 
 def init_db() -> None:
     """
-    Creates all tables defined in SQLModel metadata if they don't exist.
+    Creates all tables defined in SQLModel metadata if they don't exist,
+    then runs incremental column migrations for existing databases.
 
     Called once from the FastAPI lifespan function in app.py.
 
@@ -52,7 +53,73 @@ def init_db() -> None:
         os.makedirs(db_dir, exist_ok=True)
 
     SQLModel.metadata.create_all(engine)
+    _run_migrations()
     logger.info("Database initialised at %s", _DB_PATH)
+
+
+def _run_migrations() -> None:
+    """
+    Applies incremental schema changes to existing SQLite databases.
+
+    SQLAlchemy's create_all() does not add new columns to existing tables,
+    so each new column must be added here with an existence check.
+
+    Returns:
+        None
+    """
+    with engine.connect() as conn:
+        # NOTE: Using raw SQL for ALTER TABLE is the accepted SQLite migration
+        # pattern — SQLModel/Alembic would be overkill for a single container app.
+        existing = {
+            row[1] for row in conn.exec_driver_sql("PRAGMA table_info(appconfig)")
+        }
+        # NOTE: Keep kubeconfig_path migration so existing databases that already
+        # have the column do not fail. No-op if the column is already present.
+        if "kubeconfig_path" not in existing:
+            conn.exec_driver_sql(
+                "ALTER TABLE appconfig ADD COLUMN kubeconfig_path TEXT NOT NULL DEFAULT ''"
+            )
+            logger.info("Migration: added 'kubeconfig_path' column to appconfig table.")
+        if "k8s_enabled" not in existing:
+            conn.exec_driver_sql(
+                "ALTER TABLE appconfig ADD COLUMN k8s_enabled INTEGER NOT NULL DEFAULT 0"
+            )
+            logger.info("Migration: added 'k8s_enabled' column to appconfig table.")
+        if "unifi_api_key" not in existing:
+            conn.exec_driver_sql(
+                "ALTER TABLE appconfig ADD COLUMN unifi_api_key TEXT NOT NULL DEFAULT ''"
+            )
+            logger.info("Migration: added 'unifi_api_key' column to appconfig table.")
+        if "unifi_site_id" not in existing:
+            conn.exec_driver_sql(
+                "ALTER TABLE appconfig ADD COLUMN unifi_site_id TEXT NOT NULL DEFAULT ''"
+            )
+            logger.info("Migration: added 'unifi_site_id' column to appconfig table.")
+        if "unifi_host" not in existing:
+            conn.exec_driver_sql(
+                "ALTER TABLE appconfig ADD COLUMN unifi_host TEXT NOT NULL DEFAULT ''"
+            )
+            logger.info("Migration: added 'unifi_host' column to appconfig table.")
+        if "unifi_default_ip" not in existing:
+            conn.exec_driver_sql(
+                "ALTER TABLE appconfig ADD COLUMN unifi_default_ip TEXT NOT NULL DEFAULT ''"
+            )
+            logger.info("Migration: added 'unifi_default_ip' column to appconfig table.")
+        if "unifi_enabled" not in existing:
+            conn.exec_driver_sql(
+                "ALTER TABLE appconfig ADD COLUMN unifi_enabled INTEGER NOT NULL DEFAULT 0"
+            )
+            logger.info("Migration: added 'unifi_enabled' column to appconfig table.")
+
+        # --- recordconfig table migrations ---
+        rc_existing = {
+            row[1] for row in conn.exec_driver_sql("PRAGMA table_info(recordconfig)")
+        }
+        if "unifi_static_ip" not in rc_existing:
+            conn.exec_driver_sql(
+                "ALTER TABLE recordconfig ADD COLUMN unifi_static_ip TEXT NOT NULL DEFAULT ''"
+            )
+            logger.info("Migration: added 'unifi_static_ip' column to recordconfig table.")
 
 
 def get_session() -> Generator[Session, None, None]:

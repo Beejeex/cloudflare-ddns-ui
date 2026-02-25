@@ -19,6 +19,9 @@ watchdog
 # DNS domain parsing
 tldextract
 
+# Kubernetes cluster API client
+kubernetes
+
 # Async file I/O
 aiofiles
 

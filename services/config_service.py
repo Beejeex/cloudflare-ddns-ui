@@ -101,6 +101,32 @@ class ConfigService:
         config = self._repo.load()
         return config.interval
 
+    async def get_k8s_enabled(self) -> bool:
+        """
+        Returns whether Kubernetes Ingress discovery is enabled.
+
+        Returns:
+            True if the feature is enabled, False otherwise.
+        """
+        config = self._repo.load()
+        return config.k8s_enabled
+
+    async def get_unifi_config(self) -> tuple[str, str, str, str, bool]:
+        """
+        Returns the UniFi integration configuration.
+
+        Returns:
+            A tuple of (host, api_key, site_id, default_ip, enabled).
+        """
+        config = self._repo.load()
+        return (
+            config.unifi_host,
+            config.unifi_api_key,
+            config.unifi_site_id,
+            config.unifi_default_ip,
+            config.unifi_enabled,
+        )
+
     async def get_ui_state(self) -> dict[str, bool]:
         """
         Returns the UI section visibility state.
@@ -121,15 +147,28 @@ class ConfigService:
         zones: dict[str, str],
         refresh: int,
         interval: int,
+        k8s_enabled: bool = False,
+        unifi_host: str = "",
+        unifi_api_key: str = "",
+        unifi_site_id: str = "",
+        unifi_default_ip: str = "",
+        unifi_enabled: bool = False,
     ) -> AppConfig:
         """
-        Saves new Cloudflare credentials and timing configuration.
+        Saves new Cloudflare credentials, timing configuration, Kubernetes
+        and UniFi settings.
 
         Args:
             api_token: The Cloudflare API token with DNS edit permissions.
             zones: A dict mapping base domain strings to Cloudflare zone IDs.
             refresh: UI auto-refresh interval in seconds.
             interval: Background DDNS check interval in seconds.
+            k8s_enabled: Whether Kubernetes Ingress discovery is enabled.
+            unifi_host: Hostname or IP of the local UniFi Network Application.
+            unifi_api_key: UniFi API key with DNS write access.
+            unifi_site_id: UniFi site UUID used as the DNS policy zone.
+            unifi_default_ip: Default internal IP used when creating new UniFi DNS policies.
+            unifi_enabled: Whether UniFi internal DNS management is enabled.
 
         Returns:
             The saved AppConfig instance.
@@ -139,6 +178,12 @@ class ConfigService:
         self._repo.set_zones(config, zones)
         config.refresh = refresh
         config.interval = interval
+        config.k8s_enabled = k8s_enabled
+        config.unifi_host = unifi_host
+        config.unifi_api_key = unifi_api_key
+        config.unifi_site_id = unifi_site_id
+        config.unifi_default_ip = unifi_default_ip
+        config.unifi_enabled = unifi_enabled
         self._repo.save(config)
         logger.info("Credentials and intervals updated.")
         return config

@@ -32,7 +32,7 @@
   </div>
 </div>
 
-{# API / auth error banner #}
+{# ---- Cloudflare API error banner ---- #}
 {% if api_error %}
 <div class="alert" style="background:#fef3c7; color:#92400e; border:1px solid #fde68a; display:flex; align-items:center; gap:0.75rem; margin-bottom:1rem;">
   <span style="font-size:1.125rem;">&#9888;</span>
@@ -45,13 +45,40 @@
 </div>
 {% endif %}
 
+{# ---- UniFi API error banner ---- #}
+{% if unifi_error %}
+<div class="alert" style="background:#fef3c7; color:#92400e; border:1px solid #fde68a; display:flex; align-items:center; gap:0.75rem; margin-bottom:1rem;">
+  <span style="font-size:1.125rem;">&#9888;</span>
+  <div>
+    <strong>UniFi API error</strong> &mdash; {{ unifi_error }}
+    <span style="margin-left:0.5rem;">
+      <a href="/settings" style="color:#0284c7; font-weight:600;">Go to Settings &rarr;</a>
+    </span>
+  </div>
+</div>
+{% endif %}
+
 {# -------------------------------------------------------------------------
-   Managed records table — full width
+   Managed records — Cloudflare + UniFi unified table
 ------------------------------------------------------------------------- #}
 <div class="card mb-2">
   <div class="card-header">
     <span class="card-title">Managed DNS Records</span>
-    <span class="htmx-indicator text-xs text-muted">updating…</span>
+    <div style="display:flex; align-items:center; gap:0.75rem;">
+      {% if unifi_enabled %}
+      <span style="display:inline-flex; align-items:center; gap:0.35rem; font-size:0.75rem; color:#64748b;">
+        <span style="width:8px; height:8px; border-radius:50%; background:#0284c7; display:inline-block;"></span>
+        UniFi active
+      </span>
+      {% endif %}
+      {% if k8s_enabled %}
+      <span style="display:inline-flex; align-items:center; gap:0.35rem; font-size:0.75rem; color:#64748b;">
+        <span style="width:8px; height:8px; border-radius:50%; background:#16a34a; display:inline-block;"></span>
+        K8s active
+      </span>
+      {% endif %}
+      <span class="htmx-indicator text-xs text-muted">updating…</span>
+    </div>
   </div>
 
   <div id="records-container">
@@ -91,78 +118,92 @@
 </div>
 
 {# -------------------------------------------------------------------------
-   All zone A-records — add to managed
+   Available Records — compact card grid
 ------------------------------------------------------------------------- #}
 <div class="card mb-2">
   <div class="card-header">
-    <span class="card-title">All A-Records in Zone</span>
+    <span class="card-title">Available Records</span>
+    <span style="font-size:0.75rem; color:#64748b;">
+      {{ discovery_records | length }} record{{ 's' if discovery_records | length != 1 else '' }}
+    </span>
   </div>
-  <div class="card-body">
-    {% if all_records %}
-    <table>
-      <thead>
-        <tr>
-          <th>Name</th>
-          <th>IP</th>
-          <th>TTL</th>
-          <th>Proxied</th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody>
-        {% set managed_names = records | map(attribute='name') | list %}
-        {% for r in all_records %}
-        <tr>
-          <td class="font-mono text-sm">{{ r.name }}</td>
-          <td class="font-mono text-sm">{{ r.content }}</td>
-          <td class="text-muted text-sm">{{ r.ttl }}</td>
-          <td>
-            {% if r.proxied %}
-              <span class="badge badge-warning">Proxied</span>
-            {% else %}
-              <span class="badge badge-neutral">DNS only</span>
-            {% endif %}
-          </td>
-          <td>
-            <div class="flex gap-2">
-              {% if r.name not in managed_names %}
-              <form hx-post="/add-to-managed"
-                    hx-target="#records-container"
-                    hx-swap="innerHTML"
-                    hx-on:htmx:after-request="if(event.detail.successful) location.reload()"
-                    style="display:inline">
-                <input type="hidden" name="record_name" value="{{ r.name }}">
-                <button type="submit" class="btn btn-primary btn-sm">+ Manage</button>
-              </form>
-              {% else %}
-              <span class="badge badge-ok">Managed</span>
-              {% endif %}
-              <form hx-post="/delete-record"
-                    hx-target="#records-container"
-                    hx-swap="innerHTML"
-                    hx-confirm="Delete {{ r.name }} from Cloudflare? This cannot be undone."
-                    hx-on:htmx:after-request="if(event.detail.successful) location.reload()"
-                    style="display:inline">
-                <input type="hidden" name="record_id" value="{{ r.id }}">
-                <input type="hidden" name="record_name" value="{{ r.name }}">
-                <button type="submit" class="btn btn-danger btn-sm">Delete</button>
-              </form>
-            </div>
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-    {% else %}
-    <p class="text-muted text-sm">
-      {% if api_error %}
-        Could not load records — check the API error above.
-      {% else %}
-        No A-records found. Configure your API token and zones in Settings first.
-      {% endif %}
-    </p>
-    {% endif %}
+
+  {# Error banners #}
+  {% if zone_records_error %}
+  <div style="padding:0.5rem 1.25rem; background:#fef3c7; border-bottom:1px solid #fde68a; color:#92400e; font-size:0.8rem;">
+    &#9888; Cloudflare: {{ zone_records_error }}
   </div>
+  {% endif %}
+  {% if k8s_error %}
+  <div style="padding:0.5rem 1.25rem; background:#fef3c7; border-bottom:1px solid #fde68a; color:#92400e; font-size:0.8rem;">
+    &#9888; Kubernetes: {{ k8s_error }}
+  </div>
+  {% endif %}
+
+  {% if discovery_records %}
+  <div class="discovery-grid">
+    {% for r in discovery_records %}
+    <div class="discovery-card{% if r.name in managed_names %} discovery-card-managed{% endif %}">
+      {# Source badges row #}
+      <div class="discovery-card-top">
+        {% if r.cf_ip is not none %}
+          <span class="badge badge-cf" style="font-size:0.7rem;">CF</span>
+        {% endif %}
+        {% if r.unifi_ip is not none %}
+          <span class="badge badge-unifi" style="font-size:0.7rem;">UniFi</span>
+        {% endif %}
+        {% if r.k8s_namespace is not none %}
+          <span class="badge badge-k8s" style="font-size:0.7rem;">K8s</span>
+        {% endif %}
+      </div>
+      <div class="discovery-card-name font-mono">{{ r.name }}</div>
+      {# Per-source IP / metadata rows #}
+      <div class="discovery-card-meta" style="display:flex; flex-direction:column; gap:0.15rem;">
+        {% if r.cf_ip is not none %}
+          <span><span class="badge badge-cf" style="font-size:0.65rem; padding:0.1rem 0.35rem; vertical-align:middle;">CF</span>
+          <span class="font-mono"> {{ r.cf_ip }}</span></span>
+        {% endif %}
+        {% if r.unifi_ip is not none %}
+          <span><span class="badge badge-unifi" style="font-size:0.65rem; padding:0.1rem 0.35rem; vertical-align:middle;">UniFi</span>
+          <span class="font-mono"> {{ r.unifi_ip }}</span></span>
+        {% endif %}
+        {% if r.k8s_namespace is not none %}
+          <span><span class="badge badge-k8s" style="font-size:0.65rem; padding:0.1rem 0.35rem; vertical-align:middle;">K8s</span>
+           {{ r.k8s_namespace }}/{{ r.k8s_ingress_name }}</span>
+        {% endif %}
+      </div>
+      <div class="discovery-card-actions">
+        {% if r.name not in managed_names %}
+          <form hx-post="/add-to-managed"
+                hx-target="#records-container"
+                hx-swap="innerHTML"
+                hx-on:htmx:after-request="if(event.detail.successful) location.reload()"
+                style="display:inline">
+            <input type="hidden" name="record_name" value="{{ r.name }}">
+            <button type="submit" class="btn btn-primary btn-sm">+ Manage</button>
+          </form>
+          {% if r.cf_record_id %}
+          <form hx-post="/delete-record"
+                hx-target="#records-container"
+                hx-swap="innerHTML"
+                hx-confirm="Delete {{ r.name }} from Cloudflare? This cannot be undone."
+                hx-on:htmx:after-request="if(event.detail.successful) location.reload()"
+                style="display:inline">
+            <input type="hidden" name="record_id" value="{{ r.cf_record_id }}">
+            <input type="hidden" name="record_name" value="{{ r.name }}">
+            <button type="submit" class="btn btn-danger btn-sm">Delete</button>
+          </form>
+          {% endif %}
+        {% else %}
+          <span class="badge badge-ok" style="font-size:0.75rem;">&#10003; Managed</span>
+        {% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="card-body"><span class="text-muted text-sm">No records discovered yet.</span></div>
+  {% endif %}
 </div>
 
 {% endblock %}
@@ -170,15 +211,30 @@
 {% block scripts %}
 <script>
 (function () {
-  const interval = {{ interval | int }};
-  let remaining = interval;
   const el = document.getElementById('next-check-countdown');
+  let interval = {{ interval | int }};
+  let remaining = interval;
+  let timer = null;
+
   function tick() {
     el.textContent = remaining + 's';
     remaining = remaining > 0 ? remaining - 1 : interval;
   }
-  tick();
-  setInterval(tick, 1000);
+
+  function start(seconds, ivl) {
+    interval = ivl;
+    remaining = seconds;
+    if (timer) clearInterval(timer);
+    tick();
+    timer = setInterval(tick, 1000);
+  }
+
+  // Show placeholder until the fetch resolves so the user never sees a stale full-interval flash.
+  el.textContent = '…';
+  fetch('/api/next-check-in')
+    .then(r => r.json())
+    .then(data => start(data.seconds, data.interval))
+    .catch(() => start(remaining, interval));
 }());
 </script>
 {% endblock %}

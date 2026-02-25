@@ -65,6 +65,114 @@
         </div>
       </div>
 
+      {# ---- Kubernetes ---- #}
+      <div class="form-group" style="margin-top:1.5rem;">
+        <label style="display:flex; align-items:center; gap:0.75rem; cursor:pointer; font-weight:600; font-size:0.9rem; color:#334155;">
+          <input type="checkbox" name="k8s_enabled" value="true"
+                 {% if k8s_enabled %}checked{% endif %}
+                 style="width:1.1rem; height:1.1rem; cursor:pointer;">
+          <span>Enable Kubernetes Ingress Discovery</span>
+        </label>
+        <small style="display:block; margin-top:0.4rem;">
+          When enabled, the dashboard fetches Ingress hostnames from your cluster.
+          The connection is auto-detected: in-cluster service account first, then
+          <code>/config/kubeconfig</code> as a fallback.
+          A read-only ClusterRole is sufficient — see the RBAC sample below.
+        </small>
+        <details style="margin-top:0.75rem; font-size:0.85rem;">
+          <summary style="cursor:pointer; color:#0284c7;">Service account RBAC setup</summary>
+          <pre style="margin-top:0.5rem; background:#0f172a; color:#a3e635; padding:0.75rem 1rem; border-radius:0.375rem; font-size:0.8rem; white-space:pre; overflow-x:auto;">apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ddns-dashboard
+  namespace: ddns
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ddns-dashboard-ingress-reader
+rules:
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ddns-dashboard-ingress-reader
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: ddns-dashboard-ingress-reader
+subjects:
+  - kind: ServiceAccount
+    name: ddns-dashboard
+    namespace: ddns</pre>
+        </details>
+      </div>
+
+      {# ---- UniFi ---- #}
+      <div class="form-group" style="margin-top:1.5rem; padding-top:1.5rem; border-top:1px solid #e2e8f0;">
+        <label style="display:flex; align-items:center; gap:0.75rem; cursor:pointer; font-weight:600; font-size:0.9rem; color:#334155;">
+          <input type="checkbox" name="unifi_enabled" value="true"
+                 {% if unifi_enabled %}checked{% endif %}
+                 style="width:1.1rem; height:1.1rem; cursor:pointer;">
+          <span>Enable UniFi Internal DNS Management</span>
+        </label>
+        <small style="display:block; margin-top:0.4rem;">
+          When enabled, internal IP addresses from UniFi DNS Policies are shown
+          alongside each Cloudflare record on the dashboard.
+          Requires a UniFi Site Manager API key with DNS write access.
+        </small>
+      </div>
+
+      <div class="form-group" style="margin-top:0.75rem;">
+        <label for="unifi_host">UniFi Controller Host</label>
+        <input type="text" id="unifi_host" name="unifi_host"
+               value="{{ unifi_host }}" autocomplete="off"
+               placeholder="192.168.1.1  or  unifi.local">
+        <small>IP address or hostname of your local UniFi Network Application. SSL is not verified (self-signed cert).</small>
+      </div>
+
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:1rem; margin-top:0.75rem;">
+        <div class="form-group" style="margin-bottom:0;">
+          <label for="unifi_api_key">UniFi API Key</label>
+          <input type="password" id="unifi_api_key" name="unifi_api_key"
+                 value="{{ unifi_api_key }}" autocomplete="off"
+                 placeholder="Paste your API key here">
+          <small>From your UniFi controller &rarr; Settings &rarr; Admins &amp; Users &rarr; API Keys.</small>
+        </div>
+        <div class="form-group" style="margin-bottom:0;">
+          <label for="unifi_site_id">UniFi Site ID (UUID)</label>
+          <div style="display:flex; gap:0.5rem; align-items:flex-start;">
+            <input type="text" id="unifi_site_id" name="unifi_site_id"
+                   value="{{ unifi_site_id }}" autocomplete="off"
+                   placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                   style="flex:1;">
+            <button type="button" class="btn btn-secondary btn-sm"
+                    hx-get="/api/unifi/sites"
+                    hx-include="[name='unifi_host'],[name='unifi_api_key']"
+                    hx-target="#site-picker"
+                    hx-swap="innerHTML"
+                    hx-indicator="#site-detect-spinner"
+                    style="white-space:nowrap; margin-top:0;">
+              Detect
+            </button>
+            <span id="site-detect-spinner" class="htmx-indicator" style="align-self:center;">&#8230;</span>
+          </div>
+          <div id="site-picker" style="margin-top:0.35rem; min-height:1.25rem;"></div>
+          <small>Paste manually or click Detect to query the controller.</small>
+        </div>
+      </div>
+
+      <div class="form-group" style="margin-top:0.75rem;">
+        <label for="unifi_default_ip">Default Internal IP</label>
+        <input type="text" id="unifi_default_ip" name="unifi_default_ip"
+               value="{{ unifi_default_ip }}" autocomplete="off"
+               placeholder="172.20.9.100">
+        <small>Pre-filled when creating new UniFi DNS policies from the dashboard (e.g. your ingress load-balancer IP).</small>
+      </div>
+
       <div style="margin-top:1.5rem;">
         <button type="submit" class="btn btn-primary w-full">Save Settings</button>
       </div>

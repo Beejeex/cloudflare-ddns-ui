@@ -45,6 +45,24 @@ class AppConfig(SQLModel, table=True):
     # JSON-encoded UI section visibility state
     ui_state_json: str = Field(default='{"settings": true, "all_records": true, "logs": true}')
 
+    # Whether Kubernetes Ingress discovery is enabled (off by default)
+    k8s_enabled: bool = Field(default=False)
+
+    # UniFi API key with DNS write access (from local controller → Settings → Admins → API Keys)
+    unifi_api_key: str = Field(default="")
+
+    # UniFi site UUID used as the zone_id for DNS policy calls
+    unifi_site_id: str = Field(default="")
+
+    # Hostname or IP of the local UniFi Network Application (e.g. 192.168.1.1)
+    unifi_host: str = Field(default="")
+
+    # Default internal IPv4 used when creating new UniFi DNS policies from the dashboard
+    unifi_default_ip: str = Field(default="")
+
+    # Whether UniFi internal DNS management is enabled (off by default)
+    unifi_enabled: bool = Field(default=False)
+
 
 # ---------------------------------------------------------------------------
 # RecordStats — per-DNS-record update/failure counters
@@ -70,6 +88,45 @@ class RecordStats(SQLModel, table=True):
     # Cumulative counters since the record was first tracked
     updates: int = Field(default=0)
     failures: int = Field(default=0)
+
+
+# ---------------------------------------------------------------------------
+# RecordConfig — per-DNS-record behaviour settings
+# ---------------------------------------------------------------------------
+
+
+class RecordConfig(SQLModel, table=True):
+    """
+    Stores per-record DDNS behaviour settings.
+
+    One optional row per managed FQDN. When no row exists the application
+    uses sensible defaults (Cloudflare enabled, dynamic IP mode, UniFi off).
+
+    Collaborators:
+        - RecordConfigRepository: reads and writes these rows
+        - DnsService: reads cf_enabled/ip_mode to decide how to update
+    """
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    # Fully-qualified DNS name this config belongs to
+    record_name: str = Field(unique=True, index=True)
+
+    # Whether Cloudflare DDNS updates are active for this record
+    cf_enabled: bool = Field(default=True)
+
+    # "dynamic" — always use the current public IP detected by IpService
+    # "static"  — always use static_ip, never auto-update
+    ip_mode: str = Field(default="dynamic")
+
+    # The fixed external IP to use when ip_mode == "static"
+    static_ip: str = Field(default="")
+
+    # Whether this record is also pushed to UniFi DNS policies
+    unifi_enabled: bool = Field(default=False)
+
+    # The fixed IP to set in the UniFi DNS policy (defaults to public IP when empty)
+    unifi_static_ip: str = Field(default="")
 
 
 # ---------------------------------------------------------------------------
