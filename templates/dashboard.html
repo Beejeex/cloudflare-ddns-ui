@@ -138,14 +138,19 @@
   <div class="discovery-grid">
     {% for r in discovery_records %}
     <div class="discovery-card{% if r.name in managed_names %} discovery-card-managed{% endif %}">
+      {# Source badges row #}
       <div class="discovery-card-top">
-        {% if r.source == 'cloudflare' %}
+        {% if r.cf_ip is not none %}
           <span class="badge badge-cf" style="font-size:0.7rem;">CF</span>
-        {% else %}
+        {% endif %}
+        {% if r.unifi_ip is not none %}
+          <span class="badge badge-unifi" style="font-size:0.7rem;">UniFi</span>
+        {% endif %}
+        {% if r.k8s_namespace is not none %}
           <span class="badge badge-k8s" style="font-size:0.7rem;">K8s</span>
         {% endif %}
-        {% if r.source == 'cloudflare' %}
-          {% if r.proxied %}
+        {% if r.cf_ip is not none %}
+          {% if r.cf_proxied %}
             <span class="badge badge-ok" style="font-size:0.7rem;">Proxied</span>
           {% else %}
             <span class="badge badge-neutral" style="font-size:0.7rem;">DNS only</span>
@@ -153,11 +158,19 @@
         {% endif %}
       </div>
       <div class="discovery-card-name font-mono">{{ r.name }}</div>
-      <div class="discovery-card-meta text-muted">
-        {% if r.source == 'cloudflare' %}
-          <span class="font-mono">{{ r.ip }}</span>
-        {% else %}
-          {{ r.namespace }} / {{ r.ingress_name }}
+      {# Per-source IP / metadata rows #}
+      <div class="discovery-card-meta text-muted" style="display:flex; flex-direction:column; gap:0.15rem;">
+        {% if r.cf_ip is not none %}
+          <span><span class="badge badge-cf" style="font-size:0.65rem; padding:0.1rem 0.35rem; vertical-align:middle;">CF</span>
+          <span class="font-mono"> {{ r.cf_ip }}</span></span>
+        {% endif %}
+        {% if r.unifi_ip is not none %}
+          <span><span class="badge badge-unifi" style="font-size:0.65rem; padding:0.1rem 0.35rem; vertical-align:middle;">UniFi</span>
+          <span class="font-mono"> {{ r.unifi_ip }}</span></span>
+        {% endif %}
+        {% if r.k8s_namespace is not none %}
+          <span><span class="badge badge-k8s" style="font-size:0.65rem; padding:0.1rem 0.35rem; vertical-align:middle;">K8s</span>
+           {{ r.k8s_namespace }}/{{ r.k8s_ingress_name }}</span>
         {% endif %}
       </div>
       <div class="discovery-card-actions">
@@ -170,7 +183,7 @@
             <input type="hidden" name="record_name" value="{{ r.name }}">
             <button type="submit" class="btn btn-primary btn-sm">+ Manage</button>
           </form>
-          {% if r.source == 'cloudflare' and r.cf_record_id %}
+          {% if r.cf_record_id %}
           <form hx-post="/delete-record"
                 hx-target="#records-container"
                 hx-swap="innerHTML"

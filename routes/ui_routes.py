@@ -156,32 +156,36 @@ async def dashboard(
             logger.warning("Could not fetch zone records: %s", exc)
             zone_records_error = str(exc)
 
-    # Build unified discovery list: CF records first, then K8s-only hostnames
-    # Each entry carries a "source" key so the template can render a badge.
-    discovery_records: list[dict] = []
-    cf_names: set[str] = set()
+    # Build unified discovery list — one entry per hostname, merging CF, UniFi and K8s.
+    # Keyed by hostname so sources are automatically coalesced.
+    discovery_map: dict[str, dict] = {}
+
+    def _entry(name: str) -> dict:
+        return {
+            "name": name,
+            "cf_ip": None, "cf_record_id": None, "cf_proxied": False,
+            "unifi_ip": None, "unifi_record_id": None,
+            "k8s_namespace": None, "k8s_ingress_name": None,
+        }
+
     for r in zone_records:
-        cf_names.add(r.name)
-        discovery_records.append({
-            "name": r.name,
-            "source": "cloudflare",
-            "cf_record_id": r.id,
-            "ip": r.content,
-            "proxied": r.proxied,
-            "namespace": None,
-            "ingress_name": None,
-        })
+        e = discovery_map.setdefault(r.name, _entry(r.name))
+        e["cf_ip"] = r.content
+        e["cf_record_id"] = r.id
+        e["cf_proxied"] = r.proxied
+
+    # Merge UniFi policies when UniFi is enabled
+    for name, policy in unifi_policy_map.items():
+        e = discovery_map.setdefault(name, _entry(name))
+        e["unifi_ip"] = policy.content
+        e["unifi_record_id"] = policy.id
+
     for r in k8s_records:
-        # NOTE: Only add K8s entries that are not already represented in the CF zone.
-        if r.hostname not in cf_names:
-            discovery_records.append({
-                "name": r.hostname,
-                "source": "k8s",
-                "ip": None,
-                "proxied": False,
-                "namespace": r.namespace,
-                "ingress_name": r.ingress_name,
-            })
+        e = discovery_map.setdefault(r.hostname, _entry(r.hostname))
+        e["k8s_namespace"] = r.namespace
+        e["k8s_ingress_name"] = r.ingress_name
+
+    discovery_records: list[dict] = sorted(discovery_map.values(), key=lambda x: x["name"])
 
     return templates.TemplateResponse(
         request,
