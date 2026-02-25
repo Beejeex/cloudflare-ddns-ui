@@ -112,11 +112,18 @@ async def dashboard(
 
         stats = await stats_service.get_for_record(record_name)
         dns_ip = dns_record.content if dns_record else "Not Found"
-        is_up_to_date = dns_record is not None and dns_ip == current_ip
+        rc = record_configs.get(record_name)
+        cf_enabled = rc.cf_enabled if rc else True
+        # NOTE: Only evaluate up-to-date status when CF DDNS is enabled for this record.
+        # If CF is disabled, the record won't exist in Cloudflare by design — show Unknown,
+        # not "Needs update", to avoid misleading the user.
+        if not cf_enabled:
+            is_up_to_date = None
+        else:
+            is_up_to_date = dns_record is not None and dns_ip == current_ip
 
         # NOTE: Match unified policy by domain name from the pre-fetched map
         unifi_policy = unifi_policy_map.get(record_name)
-        rc = record_configs.get(record_name)
 
         record_data.append({
             "name": record_name,
