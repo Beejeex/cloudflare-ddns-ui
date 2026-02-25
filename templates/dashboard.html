@@ -149,13 +149,6 @@
         {% if r.k8s_namespace is not none %}
           <span class="badge badge-k8s" style="font-size:0.7rem;">K8s</span>
         {% endif %}
-        {% if r.cf_ip is not none %}
-          {% if r.cf_proxied %}
-            <span class="badge badge-ok" style="font-size:0.7rem;">Proxied</span>
-          {% else %}
-            <span class="badge badge-neutral" style="font-size:0.7rem;">DNS only</span>
-          {% endif %}
-        {% endif %}
       </div>
       <div class="discovery-card-name font-mono">{{ r.name }}</div>
       {# Per-source IP / metadata rows #}

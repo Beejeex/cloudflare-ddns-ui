@@ -163,7 +163,7 @@ async def dashboard(
     def _entry(name: str) -> dict:
         return {
             "name": name,
-            "cf_ip": None, "cf_record_id": None, "cf_proxied": False,
+            "cf_ip": None, "cf_record_id": None,
             "unifi_ip": None, "unifi_record_id": None,
             "k8s_namespace": None, "k8s_ingress_name": None,
         }
@@ -172,7 +172,6 @@ async def dashboard(
         e = discovery_map.setdefault(r.name, _entry(r.name))
         e["cf_ip"] = r.content
         e["cf_record_id"] = r.id
-        e["cf_proxied"] = r.proxied
 
     # Merge UniFi policies when UniFi is enabled
     for name, policy in unifi_policy_map.items():
