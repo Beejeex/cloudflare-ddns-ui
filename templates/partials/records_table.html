@@ -1,15 +1,16 @@
 ﻿{# partials/records_table.html - record cards grid #}
 {% if records %}
 {% for r in records %}
-{# Determine accent class for the coloured left border #}
-{% if r.cfg_cf_enabled %}
-  {% if r.is_up_to_date is none %}{% set accent = 'accent-cf' %}
-  {% elif r.is_up_to_date %}{% set accent = 'accent-cf-ok' %}
-  {% else %}{% set accent = 'accent-cf-warn' %}{% endif %}
-{% elif r.cfg_unifi_enabled %}{% set accent = 'accent-unifi' %}
-{% else %}{% set accent = '' %}{% endif %}
-{% if r.failures > 0 and not r.is_up_to_date and r.cfg_cf_enabled %}{% set accent = 'accent-error' %}{% endif %}
-<div class="record-card {{ accent }}">
+<div class="record-card
+  {%- if r.cfg_cf_enabled -%}
+    {%- if r.failures > 0 and r.is_up_to_date is not none and not r.is_up_to_date %} accent-error
+    {%- elif r.is_up_to_date %} accent-cf-ok
+    {%- elif r.is_up_to_date is none %} accent-cf
+    {%- else %} accent-cf-warn{%- endif -%}
+  {%- elif r.cfg_unifi_enabled -%}
+    {%- set unifi_target = r.cfg_unifi_static_ip or unifi_default_ip or '' -%}
+    {%- if r.unifi_ip and r.unifi_ip == unifi_target %} accent-unifi-ok{%- else %} accent-unifi{%- endif -%}
+  {%- endif %}">
   <div class="record-card-header">
     <div style="display:flex; align-items:center; gap:0.6rem; flex:1; min-width:0; flex-wrap:wrap;">
       <span class="record-name font-mono" style="font-size:0.9375rem;">{{ r.name }}</span>

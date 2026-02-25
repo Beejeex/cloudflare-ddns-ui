@@ -242,11 +242,12 @@
       transition: box-shadow 0.15s;
     }
     .record-card:hover { box-shadow: 0 3px 12px rgba(0,0,0,0.09); }
-    .record-card.accent-cf      { border-left-color: #0284c7; } /* sky-600 — CF active */
-    .record-card.accent-cf-ok   { border-left-color: #16a34a; } /* green-600 — CF up to date */
-    .record-card.accent-cf-warn { border-left-color: #f59e0b; } /* amber-500 — CF needs update */
-    .record-card.accent-unifi   { border-left-color: #7c3aed; } /* violet-600 — UniFi active */
-    .record-card.accent-error   { border-left-color: #dc2626; } /* red-600 — failure */
+    .record-card.accent-cf      { border-left-color: #0284c7; } /* sky-600    — CF active / unknown */
+    .record-card.accent-cf-ok   { border-left-color: #16a34a; } /* green-600  — CF up to date */
+    .record-card.accent-cf-warn { border-left-color: #f59e0b; } /* amber-500  — CF needs update */
+    .record-card.accent-error   { border-left-color: #dc2626; } /* red-600    — failure */
+    .record-card.accent-unifi   { border-left-color: #7c3aed; } /* violet-600 — UniFi pending / out of sync */
+    .record-card.accent-unifi-ok { border-left-color: #16a34a; } /* green-600 — UniFi synced */
 
     .record-card-header {
       display: flex;
