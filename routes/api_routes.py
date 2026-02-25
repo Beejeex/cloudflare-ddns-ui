@@ -120,8 +120,8 @@ async def current_ip(request: Request) -> str:
 @router.get("/unifi/sites", response_class=HTMLResponse)
 async def get_unifi_sites(
     request: Request,
-    host: str = Query(default=""),
-    api_key: str = Query(default=""),
+    unifi_host: str = Query(default="", alias="unifi_host"),
+    unifi_api_key: str = Query(default="", alias="unifi_api_key"),
     http_client: httpx.AsyncClient = Depends(get_unifi_http_client),
 ) -> HTMLResponse:
     """
@@ -132,18 +132,18 @@ async def get_unifi_sites(
     to save settings first.
 
     Args:
-        host: UniFi controller host (IP or hostname).
-        api_key: UniFi API key.
+        unifi_host: UniFi controller host (IP or hostname).
+        unifi_api_key: UniFi API key.
         http_client: Shared async client with verify=False.
 
     Returns:
         HTML partial rendered from partials/unifi_sites.html.
     """
     context: dict = {"request": request, "sites": [], "error": None}
-    if not host or not api_key:
+    if not unifi_host or not unifi_api_key:
         context["error"] = "Enter a host and API key first."
     else:
-        client = UnifiClient(http_client=http_client, api_key=api_key, host=host)
+        client = UnifiClient(http_client=http_client, api_key=unifi_api_key, host=unifi_host)
         try:
             context["sites"] = await client.list_sites()
         except UnifiProviderError as exc:
