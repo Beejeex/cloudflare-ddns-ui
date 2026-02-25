@@ -96,7 +96,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         config = config_repo.load()
         interval = config.interval
 
-    scheduler = create_scheduler(http_client=http_client, interval_seconds=interval)
+    scheduler = create_scheduler(http_client=http_client, unifi_http_client=unifi_http_client, interval_seconds=interval)
     scheduler.start()
     app.state.scheduler = scheduler
 

@@ -125,6 +125,9 @@ class RecordConfig(SQLModel, table=True):
     # Whether this record is also pushed to UniFi DNS policies
     unifi_enabled: bool = Field(default=False)
 
+    # The fixed IP to set in the UniFi DNS policy (defaults to public IP when empty)
+    unifi_static_ip: str = Field(default="")
+
 
 # ---------------------------------------------------------------------------
 # LogEntry — persistent DDNS log entries shown in the UI log panel

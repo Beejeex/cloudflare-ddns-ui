@@ -92,7 +92,7 @@ async def dashboard(
     # Fetch all UniFi DNS policies in one call upfront (avoid N per-record requests)
     unifi_error: str | None = None
     unifi_policy_map: dict[str, object] = {}
-    _, _, unifi_site_id, _, unifi_enabled = await config_service.get_unifi_config()
+    _, _, unifi_site_id, unifi_default_ip, unifi_enabled = await config_service.get_unifi_config()
     if unifi_enabled and unifi_client.is_configured() and unifi_site_id:
         try:
             policies = await unifi_client.list_records(unifi_site_id)
@@ -134,6 +134,7 @@ async def dashboard(
             "cfg_ip_mode": rc.ip_mode if rc else "dynamic",
             "cfg_static_ip": rc.static_ip if rc else "",
             "cfg_unifi_enabled": rc.unifi_enabled if rc else False,
+            "cfg_unifi_static_ip": rc.unifi_static_ip if rc else "",
         })
 
     # Discover hostnames from Kubernetes Ingress resources (optional feature)
@@ -196,9 +197,11 @@ async def dashboard(
             "api_error": api_error,
             "managed_names": managed_records,
             "unifi_enabled": unifi_enabled,
+            "unifi_default_ip": unifi_default_ip,
             "unifi_error": unifi_error,
             "discovery_records": discovery_records,
             "zone_records_error": zone_records_error,
+            "k8s_enabled": kubernetes_service.is_enabled(),
             "k8s_error": k8s_error,
         },
     )

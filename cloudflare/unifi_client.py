@@ -24,8 +24,8 @@ logger = logging.getLogger(__name__)
 # Exported so tests can construct expected URLs without duplicating the string.
 _UNIFI_PATH = "/proxy/network/integration/v1"
 
-# Default TTL for newly created DNS policies (4 hours, same as UniFi default)
-_DEFAULT_TTL = 14400
+# TTL of 0 = auto (inherits from the UniFi site's global DNS TTL setting)
+_DEFAULT_TTL = 0
 
 # Maximum records to fetch in a single list call (UniFi API max is 200)
 _LIST_LIMIT = 200

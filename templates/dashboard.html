@@ -71,6 +71,12 @@
         UniFi active
       </span>
       {% endif %}
+      {% if k8s_enabled %}
+      <span style="display:inline-flex; align-items:center; gap:0.35rem; font-size:0.75rem; color:#64748b;">
+        <span style="width:8px; height:8px; border-radius:50%; background:#16a34a; display:inline-block;"></span>
+        K8s active
+      </span>
+      {% endif %}
       <span class="htmx-indicator text-xs text-muted">updating…</span>
     </div>
   </div>

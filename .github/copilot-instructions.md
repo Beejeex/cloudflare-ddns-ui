@@ -55,29 +55,29 @@ services/
     log_service.py         # Reads, filters, and parses log entries for the UI
 
 repositories/
-    config_repository.py   # SQLModel DB access for AppConfig table (load, save)
-    stats_repository.py    # SQLModel DB access for RecordStats table
+    config_repository.py         # SQLModel DB access for AppConfig table (load, save)
+    stats_repository.py          # SQLModel DB access for RecordStats table
+    record_config_repository.py  # SQLModel DB access for RecordConfig table (per-record settings)
 
 db/
-    database.py            # SQLite engine, session factory, create_all on startup
-    models.py              # SQLModel table definitions: AppConfig, RecordStats, LogEntry
+    database.py            # SQLite engine, session factory, create_all + _run_migrations on startup
+    models.py              # SQLModel table definitions: AppConfig, RecordStats, LogEntry, RecordConfig
 
 cloudflare/
     dns_provider.py        # Abstract Protocol / ABC: DNSProvider interface
     cloudflare_client.py   # Implements DNSProvider; all Cloudflare REST calls (httpx)
-    # Future providers drop in here without touching any other file:
-    # kubernetes_client.py  — reads Ingress resources, writes internal A-records
-    # unifi_client.py       — uses UniFi Network API to create/update internal DNS records
+    unifi_client.py        # Implements DNSProvider; UniFi Network API DNS policies (httpx, verify=False)
+    kubernetes_client.py   # Kubernetes Ingress discovery (reads hostnames only, no writes)
 
 routes/
     ui_routes.py           # GET handlers that render full pages
     action_routes.py       # POST handlers that return HTMX partial fragments
-    api_routes.py          # JSON API endpoints (current IP, logs)
+    api_routes.py          # JSON API endpoints (current IP, logs, UniFi sites)
 
 log_cleanup.py             # Cleanup scheduler: trims old LogEntry rows from SQLite
-scheduler.py               # APScheduler setup; registers the DDNS check job
+scheduler.py               # APScheduler setup; registers the DDNS check job + UniFi sync pass
 watcher.py                 # watchdog observer; detects out-of-band config file changes
-exceptions.py              # All custom exception classes: DnsProviderError, ConfigLoadError, IpFetchError
+exceptions.py              # All custom exception classes: DnsProviderError, UnifiProviderError, KubernetesError, ConfigLoadError, IpFetchError
 dependencies.py            # FastAPI Depends() providers for all services and DB sessions
 app.py                     # FastAPI app factory; lifespan wires up DB, scheduler, watcher
 ```
@@ -89,9 +89,9 @@ app.py                     # FastAPI app factory; lifespan wires up DB, schedule
 
 - Define an abstract base class (or protocol) `DNSProvider` with methods such as `get_record()`, `update_record()`, `create_record()`, `delete_record()`, and `list_records()`.
 - `CloudflareClient` must implement `DNSProvider`. Adding a new DNS provider (e.g., a Kubernetes Ingress DNS writer or a UniFi Network API client for internal DNS records) means creating a new class, not editing existing classes.
-- The planned **internal DNS mode** (Kubernetes + UniFi) must be implementable by adding new `DNSProvider` implementations only — zero changes to `dns_service.py`, `scheduler.py`, or any route handler.
+- The planned **internal DNS mode** (Kubernetes + UniFi) is **implemented**: `UnifiClient` creates/updates/deletes UniFi DNS policies; `KubernetesClient` discovers Ingress hostnames for the discovery panel.
 - `dns_service.py` depends on the `DNSProvider` abstraction, not on `CloudflareClient` directly.
-- Config defaults must be defined in one place. Adding a new config key means adding to the defaults dict only, not scattered `setdefault` calls.
+- The scheduler (`scheduler.py`) runs a Cloudflare DDNS cycle **and** a UniFi sync pass each interval. The UniFi pass creates policies for records with `unifi_enabled=True` and deletes them when `unifi_enabled=False`.
 
 ---
 
@@ -299,7 +299,9 @@ Do not use raw `dict` for structured data — always define a typed model.
 - Never use bare `except:` or `except Exception:` without logging the error and providing a typed fallback.
 - Raise specific custom exceptions instead of returning `None` on failure. All custom exceptions live in `exceptions.py` — nowhere else:
   - `IpFetchError` — raised by `IpService` when the public IP cannot be fetched.
-  - `DnsProviderError` — raised by any `DNSProvider` implementation on API failure.
+  - `DnsProviderError` — raised by `CloudflareClient` on Cloudflare API failure.
+  - `UnifiProviderError` — raised by `UnifiClient` on UniFi API failure.
+  - `KubernetesError` — raised by `KubernetesClient` on Kubernetes API failure.
   - `ConfigLoadError` — raised by `ConfigRepository` when the DB row is missing or corrupt.
 - Route handlers must catch service exceptions and return an appropriate HTTP response — they must not let exceptions propagate to FastAPI's default error handler silently.
 - Register custom exception handlers in `app.py` using `@app.exception_handler(MyError)` for domain exceptions that cross the HTTP boundary.
@@ -517,7 +519,7 @@ The visual design follows the same system used in `beejeex/madtracked`. Do not d
 
 ### Layout
 - Dark nav bar + light card body split. Never a fully dark or fully light page.
-- Max content width `1200px`, centered, padding `1.5rem`.
+- Max content width `2160px`, centered, padding `1.75rem 2.5rem`.
 - All content lives inside `.card` components (white, `border-radius: 0.5rem`, subtle shadow).
 
 ### Color palette (Slate scale)
@@ -541,9 +543,14 @@ The visual design follows the same system used in `beejeex/madtracked`. Do not d
 | `red-600` | `#dc2626` | Error / danger button |
 | `red-700` | `#b91c1c` | Danger button hover |
 | `lime-400` | `#a3e635` | Log terminal text |
+| `violet-700` | `#6d28d9` | UniFi badge text |
+| `violet-100` | `#ede9fe` | UniFi badge background |
+| `green-700` | `#15803d` | K8s badge text |
 
 ### Components
-- **Badges**: inline-block, `border-radius: 999px`, `font-size: 0.75rem`, `font-weight: 600`. One class per status: `.badge-ok`, `.badge-warning`, `.badge-error`.
+- **Badges**: inline-block, `border-radius: 999px`, `font-size: 0.75rem`, `font-weight: 600`. Classes: `.badge-ok`, `.badge-warning`, `.badge-error`, `.badge-unifi` (violet), `.badge-k8s` (green).
+- **Discovery grid**: `display: grid; grid-template-columns: repeat(6, 1fr); gap: 1rem` — one card per hostname, source badges (CF/UniFi/K8s) and IPs shown inline.
+- **Managed record cards**: per-record controls include Cloudflare DDNS checkbox (dynamic/static IP mode) and UniFi DNS checkbox. UniFi section shows IP Address input (prefilled from `unifi_default_ip`) only when UniFi is checked.
 - **Stat cards**: CSS grid using `.card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 1rem; }`. Value in `2rem 700` weight.
 - **Tables**: `font-size: 0.875rem`, `th` uppercase + `letter-spacing: 0.05em`, row hover `#f8fafc`.
 - **Forms**: `.form-group` spacing, `label` `0.85rem` `#475569`, all inputs full-width with `0.5rem 0.75rem` padding.
@@ -560,7 +567,42 @@ All styles live in `templates/base.html` `<style>` block. Do not add Tailwind, B
 
 ---
 
-## What NOT to Do
+## Scheduler — Two-Phase Cycle
+
+Every check cycle performs two sequential passes:
+
+1. **Cloudflare DDNS pass** (`DnsService.run_check_cycle`) — for every managed record with `cfg.cf_enabled=True`, fetches the current public IP (or uses `cfg.static_ip`) and updates the Cloudflare A-record if changed.
+2. **UniFi sync pass** (inline in `scheduler.py`) — for every managed record:
+   - `cfg.unifi_enabled=True` → create or update the UniFi DNS policy using `cfg.unifi_static_ip` (falls back to `config.unifi_default_ip`).
+   - `cfg.unifi_enabled=False` (or no config row) → delete the UniFi policy if one exists.
+   - Skipped entirely when `config.unifi_enabled=False` or credentials are absent.
+
+`create_scheduler()` requires both `http_client` (Cloudflare/IP calls) and `unifi_http_client` (verify=False, for UniFi).
+
+---
+
+## Per-Record Settings — RecordConfig
+
+`RecordConfig` (in `db/models.py`) stores per-FQDN overrides. Defaults are applied when no row exists.
+
+| Field | Default | Meaning |
+|---|---|---|
+| `cf_enabled` | `True` | Include record in Cloudflare DDNS cycle |
+| `ip_mode` | `"dynamic"` | `"dynamic"` = auto-detect public IP; `"static"` = use `static_ip` |
+| `static_ip` | `""` | Fixed external IP (used when `ip_mode="static"`) |
+| `unifi_enabled` | `False` | Manage a UniFi DNS policy for this record |
+| `unifi_static_ip` | `""` | IP for the UniFi policy; falls back to `config.unifi_default_ip` |
+
+`RecordConfigRepository.get_all(records)` returns a `dict[str, RecordConfig]` keyed by FQDN.
+
+---
+
+## DB Migrations
+
+`db/database.py` runs `_run_migrations()` after `create_all()` on every startup. New columns must be added there using `ALTER TABLE … ADD COLUMN … DEFAULT …` guarded by a `PRAGMA table_info` existence check. **Never use Alembic** — the single-container architecture does not warrant it.
+
+---
+
 
 - Do not call `httpx` or `requests` directly inside route handlers or scheduler jobs.
 - Do not put database access inside route handlers — use a service or repository.

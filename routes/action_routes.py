@@ -160,6 +160,7 @@ def _build_record_rows(
             "cfg_ip_mode": cfg.ip_mode if cfg else "dynamic",
             "cfg_static_ip": cfg.static_ip if cfg else "",
             "cfg_unifi_enabled": cfg.unifi_enabled if cfg else False,
+            "cfg_unifi_static_ip": cfg.unifi_static_ip if cfg else "",
         })
     return rows
 
@@ -197,11 +198,16 @@ async def add_to_managed(
     all_stats = await stats_service.get_all()
     stats_by_name = {s.record_name: s for s in all_stats}
     cfgs = record_config_repo.get_all(records)
+    _, _, _, unifi_default_ip, unifi_enabled = await config_service.get_unifi_config()
 
     return templates.TemplateResponse(
         request,
         "partials/records_table.html",
-        {"records": _build_record_rows(records, stats_by_name, cfgs)},
+        {
+            "records": _build_record_rows(records, stats_by_name, cfgs),
+            "unifi_enabled": unifi_enabled,
+            "unifi_default_ip": unifi_default_ip,
+        },
     )
 
 
@@ -240,11 +246,16 @@ async def remove_from_managed(
     all_stats = await stats_service.get_all()
     stats_by_name = {s.record_name: s for s in all_stats}
     cfgs = record_config_repo.get_all(records)
+    _, _, _, unifi_default_ip, unifi_enabled = await config_service.get_unifi_config()
 
     return templates.TemplateResponse(
         request,
         "partials/records_table.html",
-        {"records": _build_record_rows(records, stats_by_name, cfgs)},
+        {
+            "records": _build_record_rows(records, stats_by_name, cfgs),
+            "unifi_enabled": unifi_enabled,
+            "unifi_default_ip": unifi_default_ip,
+        },
     )
 
 
@@ -294,12 +305,15 @@ async def delete_record(
     all_stats = await stats_service.get_all()
     stats_by_name = {s.record_name: s for s in all_stats}
     cfgs = record_config_repo.get_all(records)
+    _, _, _, unifi_default_ip, unifi_enabled = await config_service.get_unifi_config()
 
     return templates.TemplateResponse(
         request,
         "partials/records_table.html",
         {
             "records": _build_record_rows(records, stats_by_name, cfgs),
+            "unifi_enabled": unifi_enabled,
+            "unifi_default_ip": unifi_default_ip,
             "error_message": error_message,
         },
     )
@@ -318,6 +332,7 @@ async def update_record_config(
     ip_mode: str = Form(default="dynamic"),
     static_ip: str = Form(default=""),
     unifi_enabled: str = Form(default="off"),
+    unifi_static_ip: str = Form(default=""),
     record_config_repo: RecordConfigRepository = Depends(get_record_config_repo),
     log_service: LogService = Depends(get_log_service),
 ) -> HTMLResponse:
@@ -345,6 +360,7 @@ async def update_record_config(
     cfg.ip_mode = ip_mode if ip_mode in ("dynamic", "static") else "dynamic"
     cfg.static_ip = static_ip.strip()
     cfg.unifi_enabled = unifi_enabled == "on"
+    cfg.unifi_static_ip = unifi_static_ip.strip()
     record_config_repo.save(cfg)
     log_service.log(
         f"Updated config for '{record_name}': cf={cfg.cf_enabled} "
