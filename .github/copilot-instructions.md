@@ -520,15 +520,15 @@ ghcr.io/beejeex/cloudflare-ddns-ui
 ```
 
 Tag convention:
-- `ghcr.io/beejeex/cloudflare-ddns-ui:<version>` — immutable release tag (e.g. `2.0.1`)
+- `ghcr.io/beejeex/cloudflare-ddns-ui:v<version>` — immutable release tag (e.g. `v2.0.1`)
 - `ghcr.io/beejeex/cloudflare-ddns-ui:latest` — always points to the most recent release
 
 Build and push workflow:
 ```bash
-docker build -t ddns-dashboard:<version> -t ddns-dashboard:latest .
-docker tag ddns-dashboard:<version> ghcr.io/beejeex/cloudflare-ddns-ui:<version>
-docker tag ddns-dashboard:latest   ghcr.io/beejeex/cloudflare-ddns-ui:latest
-docker push ghcr.io/beejeex/cloudflare-ddns-ui:<version>
+docker build -t ddns-dashboard:v<version> -t ddns-dashboard:latest .
+docker tag ddns-dashboard:v<version> ghcr.io/beejeex/cloudflare-ddns-ui:v<version>
+docker tag ddns-dashboard:latest     ghcr.io/beejeex/cloudflare-ddns-ui:latest
+docker push ghcr.io/beejeex/cloudflare-ddns-ui:v<version>
 docker push ghcr.io/beejeex/cloudflare-ddns-ui:latest
 ```
 
