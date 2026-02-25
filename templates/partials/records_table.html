@@ -35,7 +35,7 @@
         hx-post="/update-record-config"
         hx-target="#cfg-status-{{ slug }}"
         hx-swap="innerHTML"
-        hx-trigger="change"
+        hx-trigger="change, input delay:1000ms from:[name=static_ip]"
         style="padding:0.875rem 1.25rem; border-top:1px solid #e2e8f0; display:flex; flex-wrap:wrap; gap:1.25rem; align-items:flex-start;">
     <input type="hidden" name="record_name" value="{{ r.name }}">
     <div class="record-cfg-section">

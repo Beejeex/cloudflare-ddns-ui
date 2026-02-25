@@ -199,9 +199,19 @@
 {% block scripts %}
 <script>
 (function () {
-  const interval = {{ interval | int }};
-  let remaining = {{ next_check_in | int }};
   const el = document.getElementById('next-check-countdown');
+  let interval = {{ interval | int }};
+  let remaining = interval;
+
+  // Seed the countdown from the real scheduler next_run_time, not the page render time.
+  fetch('/api/next-check-in')
+    .then(r => r.json())
+    .then(data => {
+      interval = data.interval;
+      remaining = data.seconds;
+    })
+    .catch(() => {});
+
   function tick() {
     el.textContent = remaining + 's';
     remaining = remaining > 0 ? remaining - 1 : interval;

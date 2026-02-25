@@ -161,3 +161,42 @@ async def health_json() -> dict:
         A dict with a "status" key set to "ok".
     """
     return {"status": "ok"}
+
+
+@router.get("/next-check-in")
+async def next_check_in(request: Request) -> dict:
+    """
+    Returns the seconds remaining until the next scheduled DDNS check.
+
+    Reads the live next_run_time from APScheduler so the dashboard countdown
+    stays accurate across page refreshes.
+
+    Args:
+        request: The incoming FastAPI request.
+
+    Returns:
+        A dict with "seconds" (int) and "interval" (int) keys.
+    """
+    from datetime import datetime, timezone
+    from repositories.config_repository import ConfigRepository
+    from db.database import engine
+    from sqlmodel import Session
+
+    interval = 300
+    try:
+        with Session(engine) as session:
+            interval = ConfigRepository(session).load().interval
+    except Exception:
+        pass
+
+    seconds_remaining = interval
+    try:
+        scheduler = request.app.state.scheduler
+        job = scheduler.get_job("ddns_check")
+        if job and job.next_run_time:
+            delta = job.next_run_time - datetime.now(timezone.utc)
+            seconds_remaining = max(0, int(delta.total_seconds()))
+    except Exception as exc:
+        logger.debug("Could not read scheduler next_run_time: %s", exc)
+
+    return {"seconds": seconds_remaining, "interval": interval}

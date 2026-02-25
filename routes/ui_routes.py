@@ -8,7 +8,6 @@ Does NOT: mutate state, return HTMX fragments, or call DNS/IP services directly.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse
@@ -184,18 +183,6 @@ async def dashboard(
                 "ingress_name": r.ingress_name,
             })
 
-    # Compute actual seconds remaining until the next scheduled DDNS check.
-    # Falls back to the full interval so the countdown is never negative.
-    next_check_in: int = config.interval
-    try:
-        scheduler = request.app.state.scheduler
-        job = scheduler.get_job("ddns_check")
-        if job and job.next_run_time:
-            delta = job.next_run_time - datetime.now(timezone.utc)
-            next_check_in = max(0, int(delta.total_seconds()))
-    except Exception:
-        pass  # non-fatal — show full interval on any scheduler access error
-
     return templates.TemplateResponse(
         request,
         "dashboard.html",
@@ -203,7 +190,6 @@ async def dashboard(
             "current_ip": current_ip,
             "records": record_data,
             "interval": config.interval,
-            "next_check_in": next_check_in,
             "api_error": api_error,
             "managed_names": managed_records,
             "unifi_enabled": unifi_enabled,
