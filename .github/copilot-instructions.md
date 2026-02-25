@@ -516,20 +516,20 @@ def health() -> dict:
 The production image is published to **GitHub Container Registry (GHCR)**:
 
 ```
-ghcr.io/beejeex/cloudflare-ddns-ui
+ghcr.io/beejeex/cloudflare-dns-dashboard
 ```
 
 Tag convention:
-- `ghcr.io/beejeex/cloudflare-ddns-ui:v<version>` — immutable release tag (e.g. `v2.0.1`)
-- `ghcr.io/beejeex/cloudflare-ddns-ui:latest` — always points to the most recent release
+- `ghcr.io/beejeex/cloudflare-dns-dashboard:v<version>` — immutable release tag (e.g. `v2.0.1`)
+- `ghcr.io/beejeex/cloudflare-dns-dashboard:latest` — always points to the most recent release
 
 Build and push workflow:
 ```bash
-docker build -t ddns-dashboard:v<version> -t ddns-dashboard:latest .
-docker tag ddns-dashboard:v<version> ghcr.io/beejeex/cloudflare-ddns-ui:v<version>
-docker tag ddns-dashboard:latest     ghcr.io/beejeex/cloudflare-ddns-ui:latest
-docker push ghcr.io/beejeex/cloudflare-ddns-ui:v<version>
-docker push ghcr.io/beejeex/cloudflare-ddns-ui:latest
+docker build -t cloudflare-dns-dashboard:v<version> -t cloudflare-dns-dashboard:latest .
+docker tag cloudflare-dns-dashboard:v<version> ghcr.io/beejeex/cloudflare-dns-dashboard:v<version>
+docker tag cloudflare-dns-dashboard:latest     ghcr.io/beejeex/cloudflare-dns-dashboard:latest
+docker push ghcr.io/beejeex/cloudflare-dns-dashboard:v<version>
+docker push ghcr.io/beejeex/cloudflare-dns-dashboard:latest
 ```
 
 Do **not** push to `docker.io` (Docker Hub). The only registry in use is GHCR.

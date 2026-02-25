@@ -1,4 +1,4 @@
-# Cloudflare DDNS Dashboard
+# Cloudflare DNS Dashboard
 
 > ⚠️ **Beta Software** — This project is in active development. Expect breaking changes between versions. Use in production at your own risk.
 
@@ -62,7 +62,7 @@ docker run -d \
   --restart unless-stopped \
   -p 8080:8080 \
   -v /path/to/your/config:/config \
-  ghcr.io/beejeex/cloudflare-ddns-ui:latest
+  ghcr.io/beejeex/cloudflare-dns-dashboard:latest
 ```
 
 Open `http://localhost:8080` and go to **Settings** to enter your Cloudflare API token and zone IDs.
@@ -70,8 +70,8 @@ Open `http://localhost:8080` and go to **Settings** to enter your Cloudflare API
 ### Build locally
 
 ```bash
-git clone https://github.com/Beejeex/cloudflare-ddns-ui.git
-cd cloudflare-ddns-ui
+git clone https://github.com/Beejeex/cloudflare-dns-dashboard.git
+cd cloudflare-dns-dashboard
 docker build -t ddns-dashboard .
 docker run -d \
   --name ddns-dashboard \
@@ -160,8 +160,8 @@ Every interval the scheduler runs two sequential passes:
 Images are published to GitHub Container Registry:
 
 ```
-ghcr.io/beejeex/cloudflare-ddns-ui:latest      # most recent release
-ghcr.io/beejeex/cloudflare-ddns-ui:v2.0.1      # pinned release
+ghcr.io/beejeex/cloudflare-dns-dashboard:latest      # most recent release
+ghcr.io/beejeex/cloudflare-dns-dashboard:v2.0.1      # pinned release
 ```
 
 ---
