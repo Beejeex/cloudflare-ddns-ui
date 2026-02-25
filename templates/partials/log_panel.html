@@ -8,9 +8,17 @@
 <div class="log-viewer">
   {% if logs %}
     {% for entry in logs %}
-    <div class="log-line {% if entry.level == 'ERROR' %}error{% elif entry.level == 'WARNING' %}warning{% else %}info{% endif %}">{{ entry.timestamp.strftime('%Y-%m-%d %H:%M:%S') if entry.timestamp else '' }} [{{ entry.level }}] {{ entry.message }}</div>
+    {% set level_lower = entry.level | lower %}
+    {% set is_cycle_start = 'Check cycle started' in entry.message %}
+    <div class="log-line {{ level_lower }}{% if is_cycle_start %} cycle-start{% endif %}">
+      <span class="log-ts">{{ entry.timestamp.strftime('%Y-%m-%d %H:%M:%S') if entry.timestamp else '' }}</span>
+      <span class="log-level">{{ entry.level }}</span>
+      <span class="log-msg">{{ entry.message }}</span>
+    </div>
     {% endfor %}
   {% else %}
-    <div class="log-line text-muted">No log entries yet.</div>
+    <div class="log-line info">
+      <span class="log-msg" style="color:#475569;">No log entries yet.</span>
+    </div>
   {% endif %}
 </div>

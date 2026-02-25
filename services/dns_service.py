@@ -118,13 +118,17 @@ class DnsService:
         logger.info("Check cycle started — current IP: %s", current_ip)
         self._log.log(f"Check cycle started. Current public IP: {current_ip or 'N/A (static mode)'}", level="INFO")
 
+        updated_count = 0
+        skipped_count = 0
+        failed_count = 0
+
         for record_name in managed_records:
             cfg = configs.get(record_name)
 
             # Skip CF update entirely if the user has disabled Cloudflare for this record
             if cfg is not None and not cfg.cf_enabled:
                 logger.debug("Cloudflare DDNS disabled for %s — skipping.", record_name)
-                self._log.log(f"Skipped {record_name} (Cloudflare DDNS disabled).", level="INFO")
+                skipped_count += 1
                 continue
 
             # Determine which IP to target: static override or detected public IP
@@ -137,10 +141,26 @@ class DnsService:
                         f"Skipped {record_name}: public IP unavailable and no static IP configured.",
                         level="WARNING",
                     )
+                    skipped_count += 1
                     continue
                 target_ip = current_ip
 
-            await self._check_record(record_name, target_ip, zones)
+            result = await self._check_record(record_name, target_ip, zones)
+            if result == "updated":
+                updated_count += 1
+            elif result == "failed":
+                failed_count += 1
+
+        # Log a compact cycle summary instead of per-record noise for skipped records
+        active_count = len(managed_records) - skipped_count
+        summary_parts = [f"{active_count} record(s) checked via Cloudflare"]
+        if skipped_count:
+            summary_parts.append(f"{skipped_count} skipped (CF DDNS disabled)")
+        if updated_count:
+            summary_parts.append(f"{updated_count} updated")
+        if failed_count:
+            summary_parts.append(f"{failed_count} failed")
+        self._log.log("Cloudflare pass: " + ", ".join(summary_parts) + ".", level="INFO")
 
     async def check_single_record(
         self,
@@ -258,7 +278,7 @@ class DnsService:
         record_name: str,
         target_ip: str,
         zones: dict[str, str],
-    ) -> None:
+    ) -> str:
         """
         Checks a single DNS record and updates it if the IP has changed.
 
@@ -272,7 +292,9 @@ class DnsService:
             zones: Mapping of base domain to provider zone ID.
 
         Returns:
-            None
+            "updated"   — record was updated
+            "unchanged" — record was already correct
+            "failed"    — an error occurred
         """
         zone_id = self._resolve_zone_id(record_name, zones)
         if zone_id is None:
@@ -281,38 +303,40 @@ class DnsService:
                 level="WARNING",
             )
             await self._stats.record_failed(record_name)
-            return
+            return "failed"
 
         try:
             dns_record = await self._provider.get_record(zone_id, record_name)
             await self._stats.record_checked(record_name)
 
             if dns_record is None:
-                self._log.log(f"Record not found in DNS provider: {record_name}", level="WARNING")
+                self._log.log(f"Cloudflare: record not found — {record_name}", level="WARNING")
                 await self._stats.record_failed(record_name)
-                return
+                return "failed"
 
             if dns_record.content == target_ip:
                 logger.debug("%s is already up to date (%s).", record_name, target_ip)
-                self._log.log(f"{record_name} is up to date ({target_ip}).", level="INFO")
-                return
+                self._log.log(f"Cloudflare: {record_name} already up to date ({target_ip}).", level="INFO")
+                return "unchanged"
 
             # IP mismatch — update the record
             self._log.log(
-                f"IP mismatch for {record_name}: {dns_record.content} → {target_ip}. Updating...",
+                f"Cloudflare: IP change detected for {record_name} — {dns_record.content} → {target_ip}. Updating…",
                 level="INFO",
             )
             updated = await self._provider.update_record(zone_id, dns_record, target_ip)
             self._log.log(
-                f"Successfully updated {updated.name} to {target_ip}.",
+                f"Cloudflare: updated {updated.name} → {target_ip} ✓",
                 level="INFO",
             )
             await self._stats.record_updated(record_name)
+            return "updated"
 
         except DnsProviderError as exc:
-            self._log.log(f"Failed to update {record_name}: {exc}", level="ERROR")
+            self._log.log(f"Cloudflare: failed to update {record_name} — {exc}", level="ERROR")
             await self._stats.record_failed(record_name)
             logger.error("DnsProviderError for %s: %s", record_name, exc)
+            return "failed"
 
     @staticmethod
     def _resolve_zone_id(record_name: str, zones: dict[str, str]) -> str | None:

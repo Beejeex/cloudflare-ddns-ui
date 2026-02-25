@@ -99,6 +99,13 @@ async def _ddns_check_job(http_client: httpx.AsyncClient, unifi_http_client: htt
                 api_key=config.unifi_api_key,
                 host=config.unifi_host,
             )
+            unifi_enabled_records = [r for r in records if (rc := record_configs.get(r)) and rc.unifi_enabled]
+            log_service.log(
+                f"UniFi pass: syncing {len(unifi_enabled_records)} of {len(records)} record(s) to {config.unifi_host}.",
+                level="INFO",
+            )
+            unifi_created = unifi_updated = unifi_unchanged = unifi_deleted = unifi_failed = 0
+
             for record_name in records:
                 cfg = record_configs.get(record_name)
 
@@ -112,12 +119,14 @@ async def _ddns_check_job(http_client: httpx.AsyncClient, unifi_http_client: htt
                                 f"UniFi: removed policy '{record_name}' (disabled by user).",
                                 level="INFO",
                             )
+                            unifi_deleted += 1
                     except UnifiProviderError as exc:
                         log_service.log(
-                            f"UniFi: failed to remove policy '{record_name}': {exc}",
+                            f"UniFi: failed to remove policy '{record_name}' — {exc}",
                             level="ERROR",
                         )
                         logger.error("UniFi policy removal failed for %s: %s", record_name, exc)
+                        unifi_failed += 1
                     continue
 
                 # Determine target IP: per-record static → global default
@@ -127,9 +136,10 @@ async def _ddns_check_job(http_client: httpx.AsyncClient, unifi_http_client: htt
                 )
                 if not target_ip:
                     log_service.log(
-                        f"UniFi sync skipped for '{record_name}': no IP configured.",
+                        f"UniFi: skipped '{record_name}' — no IP configured.",
                         level="WARNING",
                     )
+                    unifi_failed += 1
                     continue
 
                 try:
@@ -137,23 +147,48 @@ async def _ddns_check_job(http_client: httpx.AsyncClient, unifi_http_client: htt
                     if existing is None:
                         await unifi_client.create_record(config.unifi_site_id, record_name, target_ip)
                         log_service.log(
-                            f"UniFi: created policy '{record_name}' → {target_ip}",
+                            f"UniFi: created policy '{record_name}' → {target_ip} ✓",
                             level="INFO",
                         )
+                        unifi_created += 1
                     elif existing.content != target_ip:
                         await unifi_client.update_record(config.unifi_site_id, existing, target_ip)
                         log_service.log(
-                            f"UniFi: updated policy '{record_name}' → {target_ip}",
+                            f"UniFi: updated policy '{record_name}' → {target_ip} ✓",
                             level="INFO",
                         )
+                        unifi_updated += 1
                     else:
                         logger.debug("UniFi policy '%s' already up to date (%s).", record_name, target_ip)
+                        log_service.log(
+                            f"UniFi: '{record_name}' already in sync ({target_ip}).",
+                            level="INFO",
+                        )
+                        unifi_unchanged += 1
                 except UnifiProviderError as exc:
                     log_service.log(
-                        f"UniFi: failed to sync '{record_name}': {exc}",
+                        f"UniFi: failed to sync '{record_name}' — {exc}",
                         level="ERROR",
                     )
                     logger.error("UniFi sync failed for %s: %s", record_name, exc)
+                    unifi_failed += 1
+
+            # Summary log for the UniFi pass
+            summary_parts: list[str] = []
+            if unifi_unchanged:
+                summary_parts.append(f"{unifi_unchanged} in sync")
+            if unifi_created:
+                summary_parts.append(f"{unifi_created} created")
+            if unifi_updated:
+                summary_parts.append(f"{unifi_updated} updated")
+            if unifi_deleted:
+                summary_parts.append(f"{unifi_deleted} removed")
+            if unifi_failed:
+                summary_parts.append(f"{unifi_failed} failed")
+            log_service.log(
+                "UniFi pass complete: " + (", ".join(summary_parts) if summary_parts else "nothing to do") + ".",
+                level="INFO" if not unifi_failed else "WARNING",
+            )
 
         # Run daily log cleanup at the end of each cycle if due
         run_cleanup(session, days_to_keep=7)
