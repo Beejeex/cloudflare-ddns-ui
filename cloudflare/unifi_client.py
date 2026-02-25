@@ -181,6 +181,31 @@ class UnifiClient:
         logger.debug("DELETE %s", url)
         await self._request("DELETE", url)
 
+    async def list_sites(self) -> list[dict[str, str]]:
+        """
+        Returns all sites registered on this UniFi controller.
+
+        Calls GET /sites and normalises the response to a list of dicts with
+        "id" and "name" keys regardless of how the controller names those fields.
+
+        Returns:
+            A list of dicts: [{"id": "<uuid>", "name": "<display-name>"}].
+
+        Raises:
+            UnifiProviderError: If the API call fails.
+        """
+        url = f"{self._base}/sites"
+        logger.debug("GET %s (list sites)", url)
+        data = await self._request("GET", url)
+        sites: list[dict[str, str]] = []
+        for s in data.get("data", []):
+            # NOTE: Different controller versions use "siteId" or "id" for the UUID.
+            site_id = s.get("siteId") or s.get("id", "")
+            # UniFi uses "internalReference" for the default site; fall back to "name".
+            name = s.get("name") or s.get("internalReference") or site_id[:8]
+            sites.append({"id": site_id, "name": name})
+        return sites
+
     async def list_records(self, zone_id: str) -> list[DnsRecord]:
         """
         Returns all A-record DNS policies on the given site.

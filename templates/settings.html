@@ -144,10 +144,24 @@ subjects:
         </div>
         <div class="form-group" style="margin-bottom:0;">
           <label for="unifi_site_id">UniFi Site ID (UUID)</label>
-          <input type="text" id="unifi_site_id" name="unifi_site_id"
-                 value="{{ unifi_site_id }}" autocomplete="off"
-                 placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx">
-          <small>The site UUID from the DNS Policies API URL.</small>
+          <div style="display:flex; gap:0.5rem; align-items:flex-start;">
+            <input type="text" id="unifi_site_id" name="unifi_site_id"
+                   value="{{ unifi_site_id }}" autocomplete="off"
+                   placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                   style="flex:1;">
+            <button type="button" class="btn btn-secondary btn-sm"
+                    hx-get="/api/unifi/sites"
+                    hx-include="[name='unifi_host'],[name='unifi_api_key']"
+                    hx-target="#site-picker"
+                    hx-swap="innerHTML"
+                    hx-indicator="#site-detect-spinner"
+                    style="white-space:nowrap; margin-top:0;">
+              Detect
+            </button>
+            <span id="site-detect-spinner" class="htmx-indicator" style="align-self:center;">&#8230;</span>
+          </div>
+          <div id="site-picker" style="margin-top:0.35rem; min-height:1.25rem;"></div>
+          <small>Paste manually or click Detect to query the controller.</small>
         </div>
       </div>
 

@@ -247,3 +247,55 @@ async def test_request_error_raises_unifi_provider_error(mock_http):
         client = UnifiClient(http_client=http_client, api_key="key", host=_HOST)
         with pytest.raises(UnifiProviderError, match="connection refused"):
             await client.list_records(_SITE_ID)
+
+
+# ---------------------------------------------------------------------------
+# list_sites
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_sites_returns_normalised_list(mock_http):
+    """list_sites must normalise controller-specific field names to id + name."""
+    mock_http.get(f"{_BASE}/sites").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {"siteId": "uuid-1", "name": "HQ"},
+                    {"id": "uuid-2", "internalReference": "default"},
+                ]
+            },
+        )
+    )
+    async with httpx.AsyncClient() as http_client:
+        client = UnifiClient(http_client=http_client, api_key="key", host=_HOST)
+        sites = await client.list_sites()
+    assert sites == [
+        {"id": "uuid-1", "name": "HQ"},
+        {"id": "uuid-2", "name": "default"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_list_sites_returns_empty_for_empty_controller(mock_http):
+    """list_sites must return [] when the data array is empty."""
+    mock_http.get(f"{_BASE}/sites").mock(
+        return_value=httpx.Response(200, json={"data": []})
+    )
+    async with httpx.AsyncClient() as http_client:
+        client = UnifiClient(http_client=http_client, api_key="key", host=_HOST)
+        sites = await client.list_sites()
+    assert sites == []
+
+
+@pytest.mark.asyncio
+async def test_list_sites_raises_on_http_error(mock_http):
+    """list_sites must raise UnifiProviderError when the controller returns 401."""
+    mock_http.get(f"{_BASE}/sites").mock(
+        return_value=httpx.Response(401, text="Unauthorized")
+    )
+    async with httpx.AsyncClient() as http_client:
+        client = UnifiClient(http_client=http_client, api_key="bad-key", host=_HOST)
+        with pytest.raises(UnifiProviderError):
+            await client.list_sites()

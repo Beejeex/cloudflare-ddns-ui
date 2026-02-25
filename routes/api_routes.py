@@ -10,16 +10,19 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, Request
+import httpx
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse
 from fastapi.templating import Jinja2Templates
 
+from cloudflare.unifi_client import UnifiClient
 from dependencies import (
     get_config_service,
     get_log_service,
     get_stats_service,
+    get_unifi_http_client,
 )
-from exceptions import IpFetchError
+from exceptions import IpFetchError, UnifiProviderError
 from services.config_service import ConfigService
 from services.log_service import LogService
 from services.stats_service import StatsService
@@ -112,6 +115,41 @@ async def current_ip(request: Request) -> str:
     except IpFetchError as exc:
         logger.warning("Could not fetch public IP for navbar: %s", exc)
         return "Unavailable"
+
+
+@router.get("/unifi/sites", response_class=HTMLResponse)
+async def get_unifi_sites(
+    request: Request,
+    host: str = Query(default=""),
+    api_key: str = Query(default=""),
+    http_client: httpx.AsyncClient = Depends(get_unifi_http_client),
+) -> HTMLResponse:
+    """
+    Queries the UniFi controller for all available sites and returns an HTML
+    partial so the settings page can auto-fill or show a picker for the Site ID.
+
+    Accepts the host and api_key as query parameters so the user does not need
+    to save settings first.
+
+    Args:
+        host: UniFi controller host (IP or hostname).
+        api_key: UniFi API key.
+        http_client: Shared async client with verify=False.
+
+    Returns:
+        HTML partial rendered from partials/unifi_sites.html.
+    """
+    context: dict = {"request": request, "sites": [], "error": None}
+    if not host or not api_key:
+        context["error"] = "Enter a host and API key first."
+    else:
+        client = UnifiClient(http_client=http_client, api_key=api_key, host=host)
+        try:
+            context["sites"] = await client.list_sites()
+        except UnifiProviderError as exc:
+            logger.warning("UniFi site discovery failed: %s", exc)
+            context["error"] = str(exc)
+    return templates.TemplateResponse("partials/unifi_sites.html", context)
 
 
 @router.get("/health/json")
