@@ -113,6 +113,46 @@ All configuration is stored in `/config/ddns.db` (SQLite) inside the container. 
 | **Enable Kubernetes** | Master toggle for Ingress discovery |
 | **kubeconfig** | Place a kubeconfig file at `/config/kubeconfig` for out-of-cluster access |
 
+#### In-cluster (recommended)
+
+Run the container as a Kubernetes Deployment. The app auto-detects the pod's service account token at `/var/run/secrets/kubernetes.io/serviceaccount`. Create a read-only `ClusterRole` that can list Ingress resources:
+
+```yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: dns-dashboard
+  namespace: dns-dashboard
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: dns-dashboard-ingress-reader
+rules:
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: dns-dashboard-ingress-reader
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: dns-dashboard-ingress-reader
+subjects:
+  - kind: ServiceAccount
+    name: dns-dashboard
+    namespace: dns-dashboard
+```
+
+Set `serviceAccountName: dns-dashboard` in your Deployment spec.
+
+#### Out-of-cluster (homelab / bare metal)
+
+Export a kubeconfig for a service account that has the `ClusterRole` above bound to it, then place the file at `/config/kubeconfig` (inside the container's config volume). The app checks for this file automatically when no in-cluster token is found.
+
 ---
 
 ## Per-Record Settings
@@ -161,7 +201,7 @@ Images are published to GitHub Container Registry:
 
 ```
 ghcr.io/beejeex/cloudflare-dns-dashboard:latest      # most recent release
-ghcr.io/beejeex/cloudflare-dns-dashboard:v2.0.1      # pinned release
+ghcr.io/beejeex/cloudflare-dns-dashboard:v2.0.2      # pinned release
 ```
 
 ---
@@ -171,7 +211,7 @@ ghcr.io/beejeex/cloudflare-dns-dashboard:v2.0.1      # pinned release
 | Version | Status |
 |---|---|
 | `v1.x` | Legacy Flask app — archived |
-| `v2.0.x` | **Current** — FastAPI rewrite with UniFi + Kubernetes integration |
+| `v2.0.2` | **Current** — FastAPI rewrite with UniFi + Kubernetes integration |
 
 This is **beta software**. The database schema may change between minor versions. Pin to a specific image tag in production.
 
