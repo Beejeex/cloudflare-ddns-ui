@@ -238,5 +238,5 @@ async def get_unifi_client(
     Returns:
         A UnifiClient instance.
     """
-    host, api_key, _, _ = await config_service.get_unifi_config()
+    host, api_key, _, _, _ = await config_service.get_unifi_config()
     return UnifiClient(http_client=http_client, api_key=api_key, host=host or "localhost")
