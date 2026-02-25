@@ -15,6 +15,7 @@ import logging
 import tldextract
 
 from cloudflare.dns_provider import DnsRecord, DNSProvider
+from db.models import RecordConfig
 from exceptions import DnsProviderError, IpFetchError
 from services.ip_service import IpService
 from services.log_service import LogService
@@ -69,18 +70,24 @@ class DnsService:
         self,
         managed_records: list[str],
         zones: dict[str, str],
+        record_configs: dict[str, RecordConfig] | None = None,
     ) -> None:
         """
         Runs a single DDNS check/update cycle for all managed records.
 
-        Fetches the current public IP once, then checks each record. If the
-        stored IP differs from the current IP, the record is updated. Stats
-        and log entries are written for every check regardless of outcome.
+        Fetches the current public IP once, then checks each record. Respects
+        per-record settings from RecordConfig:
+        - cf_enabled=False  → record is skipped entirely this cycle
+        - ip_mode='static'  → uses cfg.static_ip instead of the public IP
+        - ip_mode='dynamic' → uses the detected public IP (default behaviour)
 
         Args:
             managed_records: List of FQDNs to check, e.g. ["home.example.com"].
             zones: Mapping of base domain to provider zone ID,
                    e.g. {"example.com": "zone_id_abc"}.
+            record_configs: Optional per-record config map returned by
+                RecordConfigRepository.get_all(). When None all records
+                default to CF-enabled, dynamic mode.
 
         Returns:
             None
@@ -89,19 +96,51 @@ class DnsService:
             logger.debug("No managed records — skipping check cycle.")
             return
 
-        # Fetch the current public IP once for the entire cycle
+        configs = record_configs or {}
+
+        # Fetch the current public IP once — may be overridden per record in static mode
+        current_ip: str | None = None
         try:
             current_ip = await self._ip_service.get_public_ip()
         except IpFetchError as exc:
-            self._log.log(f"Could not fetch public IP: {exc}", level="ERROR")
-            logger.error("IP fetch failed; aborting check cycle: %s", exc)
-            return
+            # NOTE: Only fatal if every managed record uses dynamic mode.
+            # Static-IP records can still be checked without a public IP.
+            all_static = all(
+                configs.get(r) and configs[r].ip_mode == "static" and configs[r].static_ip
+                for r in managed_records
+            )
+            if not all_static:
+                self._log.log(f"Could not fetch public IP: {exc}", level="ERROR")
+                logger.error("IP fetch failed; aborting check cycle: %s", exc)
+                return
+            logger.warning("IP fetch failed but all records are static — continuing: %s", exc)
 
         logger.info("Check cycle started — current IP: %s", current_ip)
-        self._log.log(f"Check cycle started. Current public IP: {current_ip}", level="INFO")
+        self._log.log(f"Check cycle started. Current public IP: {current_ip or 'N/A (static mode)'}", level="INFO")
 
         for record_name in managed_records:
-            await self._check_record(record_name, current_ip, zones)
+            cfg = configs.get(record_name)
+
+            # Skip CF update entirely if the user has disabled Cloudflare for this record
+            if cfg is not None and not cfg.cf_enabled:
+                logger.debug("Cloudflare DDNS disabled for %s — skipping.", record_name)
+                self._log.log(f"Skipped {record_name} (Cloudflare DDNS disabled).", level="INFO")
+                continue
+
+            # Determine which IP to target: static override or detected public IP
+            if cfg is not None and cfg.ip_mode == "static" and cfg.static_ip:
+                target_ip = cfg.static_ip
+                logger.debug("%s using static IP %s.", record_name, target_ip)
+            else:
+                if current_ip is None:
+                    self._log.log(
+                        f"Skipped {record_name}: public IP unavailable and no static IP configured.",
+                        level="WARNING",
+                    )
+                    continue
+                target_ip = current_ip
+
+            await self._check_record(record_name, target_ip, zones)
 
     async def check_single_record(
         self,
@@ -217,7 +256,7 @@ class DnsService:
     async def _check_record(
         self,
         record_name: str,
-        current_ip: str,
+        target_ip: str,
         zones: dict[str, str],
     ) -> None:
         """
@@ -228,7 +267,8 @@ class DnsService:
 
         Args:
             record_name: The FQDN to check.
-            current_ip: The host machine's current public IP.
+            target_ip: The desired IP for the record. May be the current public IP
+                (dynamic mode) or a user-configured static IP.
             zones: Mapping of base domain to provider zone ID.
 
         Returns:
@@ -252,19 +292,19 @@ class DnsService:
                 await self._stats.record_failed(record_name)
                 return
 
-            if dns_record.content == current_ip:
-                logger.debug("%s is already up to date (%s).", record_name, current_ip)
-                self._log.log(f"{record_name} is up to date ({current_ip}).", level="INFO")
+            if dns_record.content == target_ip:
+                logger.debug("%s is already up to date (%s).", record_name, target_ip)
+                self._log.log(f"{record_name} is up to date ({target_ip}).", level="INFO")
                 return
 
             # IP mismatch — update the record
             self._log.log(
-                f"IP mismatch for {record_name}: {dns_record.content} → {current_ip}. Updating...",
+                f"IP mismatch for {record_name}: {dns_record.content} → {target_ip}. Updating...",
                 level="INFO",
             )
-            updated = await self._provider.update_record(zone_id, dns_record, current_ip)
+            updated = await self._provider.update_record(zone_id, dns_record, target_ip)
             self._log.log(
-                f"Successfully updated {updated.name} to {current_ip}.",
+                f"Successfully updated {updated.name} to {target_ip}.",
                 level="INFO",
             )
             await self._stats.record_updated(record_name)

@@ -20,6 +20,7 @@ from cloudflare.cloudflare_client import CloudflareClient
 from db.database import engine
 from log_cleanup import run_cleanup
 from repositories.config_repository import ConfigRepository
+from repositories.record_config_repository import RecordConfigRepository
 from repositories.stats_repository import StatsRepository
 from services.dns_service import DnsService
 from services.ip_service import IpService
@@ -66,6 +67,9 @@ async def _ddns_check_job(http_client: httpx.AsyncClient) -> None:
             logger.warning("No API token configured — skipping DDNS check cycle.")
             return
 
+        # Load per-record settings so the cycle respects static IPs and disabled flags
+        record_configs = RecordConfigRepository(session).get_all(records)
+
         cloudflare_client = CloudflareClient(
             http_client=http_client,
             api_token=config.api_token,
@@ -74,7 +78,7 @@ async def _ddns_check_job(http_client: httpx.AsyncClient) -> None:
         stats_service = StatsService(stats_repo)
         dns_service = DnsService(cloudflare_client, ip_service, stats_service, log_service)
 
-        await dns_service.run_check_cycle(records, zones)
+        await dns_service.run_check_cycle(records, zones, record_configs=record_configs)
 
         # Run daily log cleanup at the end of each cycle if due
         run_cleanup(session, days_to_keep=7)
