@@ -11,8 +11,6 @@ import logging
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse
-from fastapi.templating import Jinja2Templates
-
 from dependencies import (
     get_config_service,
     get_dns_service,
@@ -34,7 +32,23 @@ from services.stats_service import StatsService
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-templates = Jinja2Templates(directory="templates")
+from shared_templates import templates  # noqa: E402
+
+
+def _to_local_policy_name(record_name: str) -> str:
+    """
+    Returns the UniFi ".local" policy name for a managed FQDN.
+
+    Args:
+        record_name: Managed FQDN, e.g. "home.example.com".
+
+    Returns:
+        Host-based local name, e.g. "home.local".
+    """
+    name = record_name.strip()
+    if name.endswith(".local"):
+        return name
+    return f"{name.split('.', 1)[0]}.local"
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -124,6 +138,7 @@ async def dashboard(
 
         # NOTE: Match unified policy by domain name from the pre-fetched map
         unifi_policy = unifi_policy_map.get(record_name)
+        unifi_local_policy = unifi_policy_map.get(_to_local_policy_name(record_name))
 
         record_data.append({
             "name": record_name,
@@ -135,6 +150,7 @@ async def dashboard(
             "last_checked": stats.last_checked.isoformat() if stats and stats.last_checked else None,
             "last_updated": stats.last_updated.isoformat() if stats and stats.last_updated else None,
             "unifi_ip": unifi_policy.content if unifi_policy else None,
+            "unifi_local_ip": unifi_local_policy.content if unifi_local_policy else None,
             "unifi_record_id": unifi_policy.id if unifi_policy else None,
             # Per-record settings (from RecordConfig, defaults if no row exists)
             "cfg_cf_enabled": rc.cf_enabled if rc else True,
@@ -142,6 +158,8 @@ async def dashboard(
             "cfg_static_ip": rc.static_ip if rc else "",
             "cfg_unifi_enabled": rc.unifi_enabled if rc else False,
             "cfg_unifi_static_ip": rc.unifi_static_ip if rc else "",
+            "cfg_unifi_local_enabled": rc.unifi_local_enabled if rc else False,
+            "cfg_unifi_local_static_ip": rc.unifi_local_static_ip if rc else "",
         })
 
     # Discover hostnames from Kubernetes Ingress resources (optional feature)

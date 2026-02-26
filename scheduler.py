@@ -35,6 +35,22 @@ logger = logging.getLogger(__name__)
 _JOB_ID = "ddns_check"
 
 
+def _to_local_policy_name(record_name: str) -> str:
+    """
+    Converts a managed FQDN into its UniFi local policy name.
+
+    Args:
+        record_name: Managed DNS name, e.g. "home.example.com".
+
+    Returns:
+        Local DNS name, e.g. "home.local".
+    """
+    name = record_name.strip()
+    if name.endswith(".local"):
+        return name
+    return f"{name.split('.', 1)[0]}.local"
+
+
 # ---------------------------------------------------------------------------
 # Scheduler job
 # ---------------------------------------------------------------------------
@@ -127,6 +143,26 @@ async def _ddns_check_job(http_client: httpx.AsyncClient, unifi_http_client: htt
                         )
                         logger.error("UniFi policy removal failed for %s: %s", record_name, exc)
                         unifi_failed += 1
+
+                    # Also remove derived .local policy when UniFi is disabled.
+                    local_record_name = _to_local_policy_name(record_name)
+                    if local_record_name != record_name:
+                        try:
+                            existing_local = await unifi_client.get_record(config.unifi_site_id, local_record_name)
+                            if existing_local is not None:
+                                await unifi_client.delete_record(config.unifi_site_id, existing_local.id)
+                                log_service.log(
+                                    f"UniFi: removed local policy '{local_record_name}' (disabled by user).",
+                                    level="INFO",
+                                )
+                                unifi_deleted += 1
+                        except UnifiProviderError as exc:
+                            log_service.log(
+                                f"UniFi: failed to remove local policy '{local_record_name}' — {exc}",
+                                level="ERROR",
+                            )
+                            logger.error("UniFi local policy removal failed for %s: %s", local_record_name, exc)
+                            unifi_failed += 1
                     continue
 
                 # Determine target IP: per-record static → global default
@@ -171,6 +207,75 @@ async def _ddns_check_job(http_client: httpx.AsyncClient, unifi_http_client: htt
                         level="ERROR",
                     )
                     logger.error("UniFi sync failed for %s: %s", record_name, exc)
+                    unifi_failed += 1
+
+                # --- Optional .local sync pass for this record ---
+                local_record_name = _to_local_policy_name(record_name)
+                # NOTE: If the managed record itself is already *.local there is
+                # no separate secondary name to manage.
+                if local_record_name == record_name:
+                    continue
+
+                if not cfg.unifi_local_enabled:
+                    try:
+                        existing_local = await unifi_client.get_record(config.unifi_site_id, local_record_name)
+                        if existing_local is not None:
+                            await unifi_client.delete_record(config.unifi_site_id, existing_local.id)
+                            log_service.log(
+                                f"UniFi: removed local policy '{local_record_name}' (disabled by user).",
+                                level="INFO",
+                            )
+                            unifi_deleted += 1
+                    except UnifiProviderError as exc:
+                        log_service.log(
+                            f"UniFi: failed to remove local policy '{local_record_name}' — {exc}",
+                            level="ERROR",
+                        )
+                        logger.error("UniFi local policy removal failed for %s: %s", local_record_name, exc)
+                        unifi_failed += 1
+                    continue
+
+                local_target_ip = (
+                    cfg.unifi_local_static_ip.strip()
+                    or cfg.unifi_static_ip.strip()
+                    or config.unifi_default_ip.strip()
+                )
+                if not local_target_ip:
+                    log_service.log(
+                        f"UniFi: skipped local policy '{local_record_name}' — no IP configured.",
+                        level="WARNING",
+                    )
+                    unifi_failed += 1
+                    continue
+
+                try:
+                    existing_local = await unifi_client.get_record(config.unifi_site_id, local_record_name)
+                    if existing_local is None:
+                        await unifi_client.create_record(config.unifi_site_id, local_record_name, local_target_ip)
+                        log_service.log(
+                            f"UniFi: created local policy '{local_record_name}' → {local_target_ip} ✓",
+                            level="INFO",
+                        )
+                        unifi_created += 1
+                    elif existing_local.content != local_target_ip:
+                        await unifi_client.update_record(config.unifi_site_id, existing_local, local_target_ip)
+                        log_service.log(
+                            f"UniFi: updated local policy '{local_record_name}' → {local_target_ip} ✓",
+                            level="INFO",
+                        )
+                        unifi_updated += 1
+                    else:
+                        log_service.log(
+                            f"UniFi: local '{local_record_name}' already in sync ({local_target_ip}).",
+                            level="INFO",
+                        )
+                        unifi_unchanged += 1
+                except UnifiProviderError as exc:
+                    log_service.log(
+                        f"UniFi: failed to sync local '{local_record_name}' — {exc}",
+                        level="ERROR",
+                    )
+                    logger.error("UniFi local sync failed for %s: %s", local_record_name, exc)
                     unifi_failed += 1
 
             # Summary log for the UniFi pass

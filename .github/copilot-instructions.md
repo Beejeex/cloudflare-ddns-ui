@@ -351,6 +351,23 @@ pytest.ini                 # asyncio_mode = auto
 - Every public service method must have at least one happy-path test and one failure/error-path test.
 - Use `pytest.fixture` for shared setup. Never copy-paste setup code between test files.
 - Override FastAPI `Depends()` providers in integration tests using `app.dependency_overrides`.
+- Run tests inside the project container image, not on the host machine. Host-level `pytest` invocation is not the supported workflow.
+
+### Running tests in Docker (required)
+
+- Build the image from the repo root:
+    ```bash
+    docker build -t cloudflare-dns-dashboard:test -f dockerfile .
+    ```
+- Run the full suite inside the container:
+    ```bash
+    docker run --rm cloudflare-dns-dashboard:test pytest -q
+    ```
+- Optional targeted runs inside the container:
+    ```bash
+    docker run --rm cloudflare-dns-dashboard:test pytest tests/unit -q
+    docker run --rm cloudflare-dns-dashboard:test pytest tests/integration -q
+    ```
 
 ### Key fixtures (define in `conftest.py`)
 

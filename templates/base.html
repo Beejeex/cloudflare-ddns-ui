@@ -541,6 +541,7 @@
       <a href="/logs" class="nav-link {% if request.url.path == '/logs' %}nav-link-active{% endif %}">Logs</a>
       <a href="/settings" class="nav-link {% if request.url.path == '/settings' %}nav-link-active{% endif %}">Settings</a>
     </nav>
+    <div style="font-size:0.7rem; color:#475569; opacity:0.6; letter-spacing:0.03em;">{{ app_version }}</div>
     <div class="navbar-ip">
       Public IP:
       <strong id="current-ip"

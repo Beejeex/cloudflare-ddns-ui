@@ -14,7 +14,6 @@ import logging
 
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse
-from fastapi.templating import Jinja2Templates
 
 from dependencies import (
     get_config_service,
@@ -34,7 +33,7 @@ from services.stats_service import StatsService
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-templates = Jinja2Templates(directory="templates")
+from shared_templates import templates  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -155,12 +154,15 @@ def _build_record_rows(
             "last_checked": s.last_checked.isoformat() if s and s.last_checked else None,
             "last_updated": s.last_updated.isoformat() if s and s.last_updated else None,
             "unifi_ip": None,
+            "unifi_local_ip": None,
             "unifi_record_id": None,
             "cfg_cf_enabled": cfg.cf_enabled if cfg else True,
             "cfg_ip_mode": cfg.ip_mode if cfg else "dynamic",
             "cfg_static_ip": cfg.static_ip if cfg else "",
             "cfg_unifi_enabled": cfg.unifi_enabled if cfg else False,
             "cfg_unifi_static_ip": cfg.unifi_static_ip if cfg else "",
+            "cfg_unifi_local_enabled": cfg.unifi_local_enabled if cfg else False,
+            "cfg_unifi_local_static_ip": cfg.unifi_local_static_ip if cfg else "",
         })
     return rows
 
@@ -333,6 +335,8 @@ async def update_record_config(
     static_ip: str = Form(default=""),
     unifi_enabled: str = Form(default="off"),
     unifi_static_ip: str = Form(default=""),
+    unifi_local_enabled: str = Form(default="off"),
+    unifi_local_static_ip: str = Form(default=""),
     record_config_repo: RecordConfigRepository = Depends(get_record_config_repo),
     log_service: LogService = Depends(get_log_service),
 ) -> HTMLResponse:
@@ -349,6 +353,9 @@ async def update_record_config(
         ip_mode: "dynamic" or "static".
         static_ip: The fixed external IP (only used when ip_mode is "static").
         unifi_enabled: "on" when the UniFi checkbox is checked.
+        unifi_static_ip: The IP used for the primary UniFi DNS policy.
+        unifi_local_enabled: "on" when the optional .local policy is enabled.
+        unifi_local_static_ip: Optional IP override for the .local UniFi policy.
         record_config_repo: Reads and writes RecordConfig rows.
         log_service: Writes a UI log entry on save.
 
@@ -361,10 +368,13 @@ async def update_record_config(
     cfg.static_ip = static_ip.strip()
     cfg.unifi_enabled = unifi_enabled == "on"
     cfg.unifi_static_ip = unifi_static_ip.strip()
+    cfg.unifi_local_enabled = unifi_local_enabled == "on"
+    cfg.unifi_local_static_ip = unifi_local_static_ip.strip()
     record_config_repo.save(cfg)
     log_service.log(
         f"Updated config for '{record_name}': cf={cfg.cf_enabled} "
-        f"mode={cfg.ip_mode} unifi={cfg.unifi_enabled}",
+        f"mode={cfg.ip_mode} unifi={cfg.unifi_enabled} "
+        f"unifi_local={cfg.unifi_local_enabled}",
         level="INFO",
     )
     return HTMLResponse(
@@ -419,6 +429,7 @@ async def create_record(
     dns_service: DnsService = Depends(get_dns_service),
     stats_service: StatsService = Depends(get_stats_service),
     log_service: LogService = Depends(get_log_service),
+    record_config_repo: RecordConfigRepository = Depends(get_record_config_repo),
 ) -> HTMLResponse:
     """
     Creates a new Cloudflare A-record and adds it to the managed list.
@@ -454,23 +465,16 @@ async def create_record(
     records = await config_service.get_managed_records()
     all_stats = await stats_service.get_all()
     stats_by_name = {s.record_name: s for s in all_stats}
+    cfgs = record_config_repo.get_all(records)
+    _, _, _, unifi_default_ip, unifi_enabled = await config_service.get_unifi_config()
 
     return templates.TemplateResponse(
         request,
         "partials/records_table.html",
         {
-            "records": [
-                {
-                    "name": r,
-                    "dns_ip": "—",
-                    "is_up_to_date": None,
-                    "updates": stats_by_name[r].updates if r in stats_by_name else 0,
-                    "failures": stats_by_name[r].failures if r in stats_by_name else 0,
-                    "last_checked": None,
-                    "last_updated": None,
-                }
-                for r in records
-            ],
+            "records": _build_record_rows(records, stats_by_name, cfgs),
+            "unifi_enabled": unifi_enabled,
+            "unifi_default_ip": unifi_default_ip,
             "error_message": error_message,
         },
     )

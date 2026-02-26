@@ -128,6 +128,12 @@ class RecordConfig(SQLModel, table=True):
     # The fixed IP to set in the UniFi DNS policy (defaults to public IP when empty)
     unifi_static_ip: str = Field(default="")
 
+    # Whether an additional "<host>.local" UniFi DNS policy is managed
+    unifi_local_enabled: bool = Field(default=False)
+
+    # Optional IP override for the ".local" policy (falls back to unifi_static_ip/default)
+    unifi_local_static_ip: str = Field(default="")
+
 
 # ---------------------------------------------------------------------------
 # LogEntry — persistent DDNS log entries shown in the UI log panel

@@ -120,6 +120,16 @@ def _run_migrations() -> None:
                 "ALTER TABLE recordconfig ADD COLUMN unifi_static_ip TEXT NOT NULL DEFAULT ''"
             )
             logger.info("Migration: added 'unifi_static_ip' column to recordconfig table.")
+        if "unifi_local_enabled" not in rc_existing:
+            conn.exec_driver_sql(
+                "ALTER TABLE recordconfig ADD COLUMN unifi_local_enabled INTEGER NOT NULL DEFAULT 0"
+            )
+            logger.info("Migration: added 'unifi_local_enabled' column to recordconfig table.")
+        if "unifi_local_static_ip" not in rc_existing:
+            conn.exec_driver_sql(
+                "ALTER TABLE recordconfig ADD COLUMN unifi_local_static_ip TEXT NOT NULL DEFAULT ''"
+            )
+            logger.info("Migration: added 'unifi_local_static_ip' column to recordconfig table.")
 
 
 def get_session() -> Generator[Session, None, None]:

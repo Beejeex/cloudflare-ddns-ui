@@ -18,7 +18,6 @@ import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
 
 from db.database import init_db
 from exceptions import ConfigLoadError, DnsProviderError, IpFetchError
@@ -43,7 +42,7 @@ logger = logging.getLogger(__name__)
 # Templates — shared Jinja2 instance used by all route handlers
 # ---------------------------------------------------------------------------
 
-templates = Jinja2Templates(directory="templates")
+from shared_templates import APP_VERSION, templates  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Lifespan — startup and shutdown logic
@@ -141,7 +140,7 @@ def create_app() -> FastAPI:
     application = FastAPI(
         title="Cloudflare DDNS Dashboard",
         description="Monitors public IP and updates Cloudflare DNS A-records automatically.",
-        version="2.0.0",
+        version="2.0.8",
         lifespan=lifespan,
     )
 

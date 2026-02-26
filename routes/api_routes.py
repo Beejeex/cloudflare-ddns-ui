@@ -13,7 +13,6 @@ import logging
 import httpx
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse
-from fastapi.templating import Jinja2Templates
 
 from cloudflare.unifi_client import UnifiClient
 from dependencies import (
@@ -30,7 +29,7 @@ from services.stats_service import StatsService
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api")
-templates = Jinja2Templates(directory="templates")
+from shared_templates import templates  # noqa: E402
 
 
 @router.get("/logs/recent", response_class=HTMLResponse)
