@@ -107,14 +107,14 @@
         <span style="font-weight:600; color:#6d28d9;">UniFi DNS</span>
       </label>
       <div id="unifi-detail-{{ slug }}"
-           style="padding-left:1.5rem; margin-top:0.3rem; display:{% if r.cfg_unifi_enabled %}flex{% else %}none{% endif %}; flex-direction:column; gap:0.35rem;">
-        <div style="display:flex; align-items:center; gap:0.5rem;">
+           style="margin-top:0.3rem; display:{% if r.cfg_unifi_enabled %}flex{% else %}none{% endif %}; flex-direction:column; gap:0.35rem;">
+        <div style="display:flex; align-items:center; gap:0.5rem; padding-left:1.5rem;">
           <label style="font-size:0.8rem; color:#475569; white-space:nowrap;">IP Address</label>
           <input type="text" name="unifi_static_ip" value="{{ r.cfg_unifi_static_ip or unifi_default_ip or '' }}"
                  placeholder="e.g. 172.20.0.10"
                  style="width:160px; font-size:0.8125rem; padding:0.3rem 0.6rem; border:1px solid #cbd5e1; border-radius:0.375rem;">
         </div>
-        <span class="text-muted" style="font-size:0.75rem;">
+        <span class="text-muted" style="font-size:0.75rem; padding-left:1.5rem;">
           {% if r.unifi_ip %}Synced: <span class="font-mono">{{ r.unifi_ip }}</span>
           {% else %}Will create policy on next check{% endif %}
         </span>
@@ -125,14 +125,14 @@
           <span style="font-weight:600; color:#6d28d9;">Create .local record</span>
         </label>
         <div id="unifi-local-detail-{{ slug }}"
-             style="padding-left:1.5rem; display:{% if r.cfg_unifi_local_enabled %}flex{% else %}none{% endif %}; flex-direction:column; gap:0.35rem;">
-          <div style="display:flex; align-items:center; gap:0.5rem;">
+             style="display:{% if r.cfg_unifi_local_enabled %}flex{% else %}none{% endif %}; flex-direction:column; gap:0.35rem;">
+          <div style="display:flex; align-items:center; gap:0.5rem; padding-left:1.5rem;">
             <label style="font-size:0.8rem; color:#475569; white-space:nowrap;">.local IP</label>
             <input type="text" name="unifi_local_static_ip" value="{{ r.cfg_unifi_local_static_ip or r.cfg_unifi_static_ip or unifi_default_ip or '' }}"
                    placeholder="e.g. 172.20.0.10"
                    style="width:160px; font-size:0.8125rem; padding:0.3rem 0.6rem; border:1px solid #cbd5e1; border-radius:0.375rem;">
           </div>
-          <span class="text-muted" style="font-size:0.75rem;">
+          <span class="text-muted" style="font-size:0.75rem; padding-left:1.5rem;">
             {% if r.unifi_local_ip %}Local synced: <span class="font-mono">{{ r.unifi_local_ip }}</span>
             {% else %}Will create &lt;host&gt;.local on next check{% endif %}
           </span>
