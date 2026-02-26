@@ -19,8 +19,9 @@ A self-hosted Dynamic DNS dashboard. Monitors your host machine's public IP addr
 - **UniFi DNS policy sync** — optionally creates and maintains DNS policies on your local UniFi Network controller for internal hostname resolution
 - **Per-record UniFi toggle** — enable or disable the UniFi policy independently for each record
 - **Per-record internal IP** — each record has its own internal IP override; falls back to a global default
+- **Optional `.local` companion record** — per record, you can also enable `<host>.local` with its own IP override
 - **TTL auto** — policies are created with TTL `0` (inherits the site's global setting)
-- **Automatic cleanup** — when UniFi is disabled for a record, its DNS policy is deleted from the controller on the next cycle
+- **Automatic cleanup** — when UniFi is disabled for a record, both primary and optional `.local` policies are deleted on the next cycle
 
 ### Kubernetes Discovery
 - **Ingress hostname discovery** — reads all Kubernetes Ingress resources across namespaces and shows discovered hostnames in a discovery panel
@@ -166,6 +167,8 @@ Each managed record has independent controls accessible from the dashboard:
 | **Static IP** | — | Fixed external IP (used when IP mode is `static`) |
 | **UniFi DNS** | `off` | Create and maintain a UniFi DNS policy for this record |
 | **Internal IP** | — | IP for the UniFi policy; falls back to the global default |
+| **Create `.local` record** | `off` | Also manage a `<host>.local` UniFi policy for this record |
+| **`.local` IP** | — | Optional IP override for `<host>.local`; falls back to Internal IP, then global default |
 
 ---
 
@@ -176,7 +179,9 @@ Every interval the scheduler runs two sequential passes:
 1. **Cloudflare DDNS pass** — for each record with Cloudflare enabled, fetches the current public IP (or uses the configured static IP) and updates the A-record if the IP has changed.
 2. **UniFi sync pass** — for each record:
    - UniFi enabled → create the DNS policy if it doesn't exist, or update it if the IP has changed
+  - Optional `.local` enabled → create/update `<host>.local` using its IP override/fallback chain
    - UniFi disabled → delete the DNS policy from the controller if one exists
+  - Optional `.local` disabled → delete the `<host>.local` policy if one exists
    - Skipped entirely when the global UniFi toggle is off or credentials are absent
 
 ---
@@ -201,7 +206,7 @@ Images are published to GitHub Container Registry:
 
 ```
 ghcr.io/beejeex/cloudflare-dns-dashboard:latest      # most recent release
-ghcr.io/beejeex/cloudflare-dns-dashboard:v2.0.4      # pinned release
+ghcr.io/beejeex/cloudflare-dns-dashboard:v2.0.8      # pinned release
 ```
 
 ---
@@ -211,7 +216,7 @@ ghcr.io/beejeex/cloudflare-dns-dashboard:v2.0.4      # pinned release
 | Version | Status |
 |---|---|
 | `v1.x` | Legacy Flask app — archived |
-| `v2.0.4` | **Current** — FastAPI rewrite with UniFi + Kubernetes integration |
+| `v2.0.8` | **Current** — FastAPI rewrite with UniFi + Kubernetes integration |
 
 This is **beta software**. The database schema may change between minor versions. Pin to a specific image tag in production.
 
