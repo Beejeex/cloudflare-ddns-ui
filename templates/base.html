@@ -27,11 +27,35 @@
     ----------------------------------------------------------------------- */
     .navbar {
       background: #1e293b; /* slate-800 */
-      padding: 0 1.5rem;
+      padding: 0 1.25rem;
       display: flex;
       align-items: center;
       justify-content: space-between;
       height: 56px;
+      position: relative;
+    }
+
+    .navbar-left,
+    .navbar-right {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      min-width: 220px;
+      z-index: 1;
+    }
+
+    .navbar-right {
+      justify-content: flex-end;
+      margin-left: auto;
+    }
+
+    .navbar-center {
+      position: absolute;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      align-items: center;
+      z-index: 0;
     }
 
     .navbar-brand {
@@ -47,10 +71,20 @@
     .navbar-ip {
       color: #94a3b8; /* slate-400 */
       font-size: 0.8125rem;
+      white-space: nowrap;
     }
 
     .navbar-ip strong {
       color: #e2e8f0; /* slate-200 */
+    }
+
+    .navbar-version {
+      font-size: 0.75rem;
+      color: #cbd5e1;
+      opacity: 0.95;
+      letter-spacing: 0.02em;
+      font-weight: 600;
+      white-space: nowrap;
     }
 
     /* -----------------------------------------------------------------------
@@ -225,9 +259,8 @@
 
     /* ---- Record cards (managed records) ---- */
     #records-container {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(500px, 1fr));
-      gap: 1rem;
+      column-width: 500px;
+      column-gap: 1rem;
       padding: 1.25rem;
     }
     .record-card {
@@ -240,6 +273,11 @@
       display: flex;
       flex-direction: column;
       transition: box-shadow 0.15s;
+      width: 100%;
+      margin: 0 0 1rem;
+      break-inside: avoid;
+      -webkit-column-break-inside: avoid;
+      page-break-inside: avoid;
     }
     .record-card:hover { box-shadow: 0 3px 12px rgba(0,0,0,0.09); }
     .record-card.accent-cf      { border-left-color: #0284c7; } /* sky-600    — CF active / unknown */
@@ -292,6 +330,10 @@
       cursor: pointer;
       font-size: 0.875rem;
       user-select: none;
+    }
+    .record-cfg-toggle input[type="checkbox"] {
+      margin: 0;
+      transform: translateY(1px);
     }
     .record-cfg-radio {
       display: flex;
@@ -533,21 +575,29 @@
 
   <!-- Nav -->
   <nav class="navbar">
-    <div class="navbar-brand">
-      &#9729; Cloudflare DDNS
+    <div class="navbar-left">
+      <div class="navbar-brand">
+        &#9729; Cloudflare DDNS
+      </div>
     </div>
-    <nav class="navbar-nav">
-      <a href="/" class="nav-link {% if request.url.path == '/' %}nav-link-active{% endif %}">Dashboard</a>
-      <a href="/logs" class="nav-link {% if request.url.path == '/logs' %}nav-link-active{% endif %}">Logs</a>
-      <a href="/settings" class="nav-link {% if request.url.path == '/settings' %}nav-link-active{% endif %}">Settings</a>
-    </nav>
-    <div style="font-size:0.7rem; color:#475569; opacity:0.6; letter-spacing:0.03em;">{{ app_version }}</div>
-    <div class="navbar-ip">
-      Public IP:
-      <strong id="current-ip"
-              hx-get="/api/current-ip"
-              hx-trigger="load, every 30s"
-              hx-swap="innerHTML">—</strong>
+
+    <div class="navbar-center">
+      <nav class="navbar-nav">
+        <a href="/" class="nav-link {% if request.url.path == '/' %}nav-link-active{% endif %}">Dashboard</a>
+        <a href="/logs" class="nav-link {% if request.url.path == '/logs' %}nav-link-active{% endif %}">Logs</a>
+        <a href="/settings" class="nav-link {% if request.url.path == '/settings' %}nav-link-active{% endif %}">Settings</a>
+      </nav>
+    </div>
+
+    <div class="navbar-right">
+      <div class="navbar-version">{{ app_version }}</div>
+      <div class="navbar-ip">
+        Public IP:
+        <strong id="current-ip"
+                hx-get="/api/current-ip"
+                hx-trigger="load, every 30s"
+                hx-swap="innerHTML">—</strong>
+      </div>
     </div>
   </nav>
 
