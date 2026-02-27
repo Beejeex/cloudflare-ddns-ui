@@ -214,6 +214,15 @@
 
 {% block scripts %}
 <script>
+function toggleRowConfig(slug) {
+  var panel = document.getElementById('row-config-' + slug);
+  var btn   = document.getElementById('cfg-btn-' + slug);
+  if (!panel) return;
+  var isOpen = panel.style.display !== 'none';
+  panel.style.display = isOpen ? 'none' : 'block';
+  if (btn) btn.classList.toggle('active', !isOpen);
+}
+
 function toggleCfSection(slug, enabled) {
   var s = document.getElementById('cf-section-' + slug);
   if (s) {
