@@ -551,6 +551,22 @@ docker push ghcr.io/beejeex/cloudflare-dns-dashboard:latest
 
 Do **not** push to `docker.io` (Docker Hub). The only registry in use is GHCR.
 
+### Release documentation policy (required)
+
+Before any version increase (`vX.Y.Z`) in code, tags, or image tags, update `README.md` first.
+
+Minimum required README updates per release:
+- Container Registry pinned tag example (`ghcr.io/beejeex/cloudflare-dns-dashboard:vX.Y.Z`)
+- Project Status current version row
+- Any feature/behavior changes introduced in that release
+
+Release order is mandatory:
+1. Update `README.md` for the new version and changes.
+2. Update in-app version references (for example `shared_templates.py` and `app.py`).
+3. Commit.
+4. Create/push git tag.
+5. Build/push GHCR images (`vX.Y.Z` and `latest`).
+
 ---
 
 ## UI Design System

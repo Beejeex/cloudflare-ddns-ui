@@ -164,7 +164,7 @@
 </div>
 {%- endfor %}
 {%- if error_message is defined and error_message %}
-<div style="background:#fee2e2; color:#991b1b; border:1px solid #fca5a5; padding:0.75rem 1.25rem; border-radius:0.375rem; font-size:0.875rem; width:100%; column-span:all; margin-bottom:1rem;">{{ error_message }}</div>
+<div style="background:#fee2e2; color:#991b1b; border:1px solid #fca5a5; padding:0.75rem 1.25rem; border-radius:0.375rem; font-size:0.875rem; width:100%; flex:1 1 100%; margin-bottom:1rem;">{{ error_message }}</div>
 {% endif %}
 <script>
 function toggleCfSection(slug, enabled) {
@@ -187,5 +187,5 @@ function toggleUnifiLocal(slug, enabled) {
 }
 </script>
 {%- else %}
-<div style="padding:1.5rem 1.25rem; color:#94a3b8; font-size:0.875rem; width:100%; column-span:all;">No records managed yet. Use the form below to create and manage records.</div>
+<div style="padding:1.5rem 1.25rem; color:#94a3b8; font-size:0.875rem; width:100%; flex:1 1 100%;">No records managed yet. Use the form below to create and manage records.</div>
 {%- endif %}
