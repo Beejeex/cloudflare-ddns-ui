@@ -259,15 +259,22 @@
 
     /* ---- Record cards (managed records) ---- */
     #records-container {
-      display: flex;
-      flex-wrap: wrap;
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
       gap: 1rem;
-      align-items: flex-start;
-      align-content: flex-start;
+      align-items: start;
       padding: 1.25rem;
     }
+
+    @media (max-width: 1700px) {
+      #records-container { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+
+    @media (max-width: 1100px) {
+      #records-container { grid-template-columns: 1fr; }
+    }
+
     .record-card {
-      flex: 1 1 500px;
       background: #fff;
       border: 1px solid #e2e8f0;
       border-left: 4px solid #cbd5e1; /* default: inactive */
@@ -277,6 +284,7 @@
       display: flex;
       flex-direction: column;
       transition: box-shadow 0.15s;
+      height: 340px;
     }
     .record-card:hover { box-shadow: 0 3px 12px rgba(0,0,0,0.09); }
     .record-card.accent-cf      { border-left-color: #0284c7; } /* sky-600    — CF active / unknown */

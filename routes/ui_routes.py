@@ -82,6 +82,16 @@ async def dashboard(
     config = await config_service.get_config()
     zones = await config_service.get_zones()
     managed_records = await config_service.get_managed_records()
+    local_parent_by_name = {
+        _to_local_policy_name(name): name
+        for name in managed_records
+        if _to_local_policy_name(name) != name
+    }
+    local_companion_names = {
+        _to_local_policy_name(name)
+        for name in managed_records
+        if _to_local_policy_name(name) != name
+    }
 
     # Load all per-record settings up front in one query
     record_configs = record_config_repo.get_all(managed_records)
@@ -191,6 +201,7 @@ async def dashboard(
             "name": name,
             "cf_ip": None, "cf_record_id": None,
             "unifi_ip": None, "unifi_record_id": None,
+            "unifi_local_ip": None, "unifi_local_record_id": None,
             "k8s_namespace": None, "k8s_ingress_name": None,
         }
 
@@ -201,6 +212,14 @@ async def dashboard(
 
     # Merge UniFi policies when UniFi is enabled
     for name, policy in unifi_policy_map.items():
+        # NOTE: Companion *.local policies are displayed on their parent
+        # hostname card instead of as separate discovery cards.
+        parent_name = local_parent_by_name.get(name)
+        if parent_name:
+            e = discovery_map.setdefault(parent_name, _entry(parent_name))
+            e["unifi_local_ip"] = policy.content
+            e["unifi_local_record_id"] = policy.id
+            continue
         e = discovery_map.setdefault(name, _entry(name))
         e["unifi_ip"] = policy.content
         e["unifi_record_id"] = policy.id

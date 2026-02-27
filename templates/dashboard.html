@@ -167,6 +167,10 @@
           <span><span class="badge badge-unifi" style="font-size:0.65rem; padding:0.1rem 0.35rem; vertical-align:middle;">UniFi</span>
           <span class="font-mono"> {{ r.unifi_ip }}</span></span>
         {% endif %}
+        {% if r.unifi_local_ip is not none %}
+          <span><span class="badge badge-unifi" style="font-size:0.65rem; padding:0.1rem 0.35rem; vertical-align:middle;">UniFi.local</span>
+          <span class="font-mono"> {{ r.unifi_local_ip }}</span></span>
+        {% endif %}
         {% if r.k8s_namespace is not none %}
           <span><span class="badge badge-k8s" style="font-size:0.65rem; padding:0.1rem 0.35rem; vertical-align:middle;">K8s</span>
            {{ r.k8s_namespace }}/{{ r.k8s_ingress_name }}</span>

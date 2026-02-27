@@ -355,6 +355,8 @@ pytest.ini                 # asyncio_mode = auto
 
 ### Running tests in Docker (required)
 
+- After any code change, run at least the relevant targeted test scope in Docker before finishing (and run the full suite for release/version bumps).
+- A change is not considered complete until containerized tests have been executed and the result is reported.
 - Build the image from the repo root:
     ```bash
     docker build -t cloudflare-dns-dashboard:test -f dockerfile .
