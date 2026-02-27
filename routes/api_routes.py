@@ -2,7 +2,8 @@
 routes/api_routes.py
 
 Responsibility: JSON and HTMX partial API endpoints consumed by the frontend
-for live polling (log tail, IP status). These are lightweight read-only endpoints.
+for live polling (log tail, IP status, records refresh). These are lightweight
+read-only endpoints.
 Does NOT: mutate state, render full pages, or perform DNS updates.
 """
 
@@ -17,12 +18,17 @@ from fastapi.responses import HTMLResponse, PlainTextResponse
 from cloudflare.unifi_client import UnifiClient
 from dependencies import (
     get_config_service,
+    get_dns_service,
     get_log_service,
+    get_record_config_repo,
     get_stats_service,
+    get_unifi_client,
     get_unifi_http_client,
 )
-from exceptions import IpFetchError, UnifiProviderError
+from exceptions import DnsProviderError, IpFetchError, UnifiProviderError
+from repositories.record_config_repository import RecordConfigRepository
 from services.config_service import ConfigService
+from services.dns_service import DnsService
 from services.log_service import LogService
 from services.stats_service import StatsService
 
@@ -199,3 +205,135 @@ async def next_check_in(request: Request) -> dict:
         logger.debug("Could not read scheduler next_run_time: %s", exc)
 
     return {"seconds": seconds_remaining, "interval": interval}
+
+
+# ---------------------------------------------------------------------------
+# Records live refresh
+# ---------------------------------------------------------------------------
+
+
+def _to_local_policy_name(record_name: str) -> str:
+    """Converts a managed FQDN to its .local counterpart (keep in sync with scheduler.py)."""
+    name = record_name.strip()
+    if name.endswith(".local"):
+        return name
+    parts = name.rsplit(".", 1)
+    if len(parts) == 1:
+        return name
+    return f"{parts[0]}.local"
+
+
+@router.get("/records", response_class=HTMLResponse)
+async def get_records(
+    request: Request,
+    config_service: ConfigService = Depends(get_config_service),
+    dns_service: DnsService = Depends(get_dns_service),
+    stats_service: StatsService = Depends(get_stats_service),
+    unifi_client: UnifiClient = Depends(get_unifi_client),
+    record_config_repo: RecordConfigRepository = Depends(get_record_config_repo),
+) -> HTMLResponse:
+    """
+    Returns the managed records table as an HTMX fragment, plus OOB stat card updates.
+
+    Polled by the dashboard every 30 s so IP status, sync badges, and
+    update/failure counters stay current without a full page reload.
+
+    Args:
+        request: The incoming FastAPI request.
+        config_service: Provides configuration and managed records.
+        dns_service: Fetches live DNS record state from Cloudflare.
+        stats_service: Provides per-record update/failure counters.
+        unifi_client: Fetches live UniFi DNS policies.
+        record_config_repo: Provides per-record settings.
+
+    Returns:
+        An HTMLResponse with the records-table partial followed by
+        hx-swap-oob elements that update the three dynamic stat cards.
+    """
+    config = await config_service.get_config()
+    zones = await config_service.get_zones()
+    managed_records = await config_service.get_managed_records()
+    record_configs = record_config_repo.get_all(managed_records)
+
+    # Fetch current public IP — fall back to empty string on failure.
+    current_ip = ""
+    try:
+        from services.ip_service import IpService
+        ip_service = IpService(request.app.state.http_client)
+        current_ip = await ip_service.get_public_ip()
+    except IpFetchError as exc:
+        logger.warning("Could not fetch public IP for records refresh: %s", exc)
+
+    _, _, unifi_site_id, unifi_default_ip, unifi_enabled = await config_service.get_unifi_config()
+    unifi_policy_map: dict[str, object] = {}
+    if unifi_enabled and unifi_client.is_configured() and unifi_site_id:
+        try:
+            policies = await unifi_client.list_records(unifi_site_id)
+            unifi_policy_map = {p.name: p for p in policies}
+        except UnifiProviderError as exc:
+            logger.warning("UniFi policy fetch failed during records refresh: %s", exc)
+
+    record_data = []
+    for record_name in managed_records:
+        dns_record = None
+        if config.api_token and zones:
+            try:
+                dns_record = await dns_service.check_single_record(record_name, zones)
+            except DnsProviderError as exc:
+                logger.warning("records refresh: CF lookup failed for %s: %s", record_name, exc)
+
+        stats = await stats_service.get_for_record(record_name)
+        dns_ip = dns_record.content if dns_record else "Not Found"
+        rc = record_configs.get(record_name)
+        cf_enabled = rc.cf_enabled if rc else True
+        if not cf_enabled:
+            is_up_to_date = None
+        else:
+            is_up_to_date = dns_record is not None and (dns_ip == current_ip)
+
+        unifi_policy = unifi_policy_map.get(record_name)
+        unifi_local_policy = unifi_policy_map.get(_to_local_policy_name(record_name))
+
+        record_data.append({
+            "name": record_name,
+            "cf_record_id": dns_record.id if dns_record else None,
+            "dns_ip": dns_ip,
+            "is_up_to_date": is_up_to_date,
+            "updates": stats.updates if stats else 0,
+            "failures": stats.failures if stats else 0,
+            "last_checked": stats.last_checked.isoformat() if stats and stats.last_checked else None,
+            "last_updated": stats.last_updated.isoformat() if stats and stats.last_updated else None,
+            "unifi_ip": unifi_policy.content if unifi_policy else None,
+            "unifi_local_ip": unifi_local_policy.content if unifi_local_policy else None,
+            "unifi_record_id": unifi_policy.id if unifi_policy else None,
+            "cfg_cf_enabled": rc.cf_enabled if rc else True,
+            "cfg_ip_mode": rc.ip_mode if rc else "dynamic",
+            "cfg_static_ip": rc.static_ip if rc else "",
+            "cfg_unifi_enabled": rc.unifi_enabled if rc else False,
+            "cfg_unifi_static_ip": rc.unifi_static_ip if rc else "",
+            "cfg_unifi_local_enabled": rc.unifi_local_enabled if rc else False,
+            "cfg_unifi_local_static_ip": rc.unifi_local_static_ip if rc else "",
+        })
+
+    # Render records table partial as the main swap target.
+    records_html = templates.get_template("partials/records_table.html").render(
+        {
+            "request": request,
+            "records": record_data,
+            "unifi_enabled": unifi_enabled,
+            "unifi_default_ip": unifi_default_ip,
+        }
+    )
+
+    # Append OOB elements so HTMX updates stat cards without a full page reload.
+    total_updates = sum(r["updates"] for r in record_data)
+    total_failures = sum(r["failures"] for r in record_data)
+    failures_style = "color:#dc2626;" if total_failures > 0 else ""
+    oob = (
+        f'<span id="stat-managed" hx-swap-oob="true">{len(record_data)}</span>'
+        f'<span id="stat-updates" hx-swap-oob="true">{total_updates}</span>'
+        f'<span id="stat-failures" hx-swap-oob="true" style="{failures_style}">'
+        f"{total_failures}</span>"
+    )
+
+    return HTMLResponse(content=records_html + oob)

@@ -206,7 +206,7 @@ Images are published to GitHub Container Registry:
 
 ```
 ghcr.io/beejeex/cloudflare-dns-dashboard:latest      # most recent release
-ghcr.io/beejeex/cloudflare-dns-dashboard:v2.0.16     # pinned release
+ghcr.io/beejeex/cloudflare-dns-dashboard:v2.0.17     # pinned release
 ```
 
 ---
@@ -219,7 +219,8 @@ ghcr.io/beejeex/cloudflare-dns-dashboard:v2.0.16     # pinned release
 | `v2.0.13` | FastAPI rewrite with UniFi + Kubernetes integration |
 | `v2.0.14` | Managed records redesigned as full-width rows with expandable config panel |
 | `v2.0.15` | Fix UniFi .local policy name to preserve full subdomain (e.g. `profilarr.hidden-hive.local`) |
-| `v2.0.16` | **Current** — Fixed badge column alignment; added per-record clear-failures button |
+| `v2.0.16` | Fixed badge column alignment; added per-record clear-failures button |
+| `v2.0.17` | **Current** — Dashboard live-refresh every 30s (records table + stat cards) without full page reload |
 
 This is **beta software**. The database schema may change between minor versions. Pin to a specific image tag in production.
 

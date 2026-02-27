@@ -10,16 +10,16 @@
 <div class="card-grid mt-2">
   <div class="stat-card">
     <div class="stat-label">Managed Records</div>
-    <div class="stat-value">{{ records | length }}</div>
+    <div class="stat-value"><span id="stat-managed">{{ records | length }}</span></div>
   </div>
   <div class="stat-card">
     <div class="stat-label">Total Updates</div>
-    <div class="stat-value">{{ records | sum(attribute='updates') }}</div>
+    <div class="stat-value"><span id="stat-updates">{{ records | sum(attribute='updates') }}</span></div>
   </div>
   <div class="stat-card">
     <div class="stat-label">Total Failures</div>
-    <div class="stat-value" style="color: {% if records | sum(attribute='failures') > 0 %}#dc2626{% else %}#1e293b{% endif %};">
-      {{ records | sum(attribute='failures') }}
+    <div class="stat-value">
+      <span id="stat-failures" style="color: {% if records | sum(attribute='failures') > 0 %}#dc2626{% else %}#1e293b{% endif %};">{{ records | sum(attribute='failures') }}</span>
     </div>
   </div>
   <div class="stat-card">
@@ -81,7 +81,10 @@
     </div>
   </div>
 
-  <div id="records-container">
+  <div id="records-container"
+       hx-get="/api/records"
+       hx-trigger="every 30s"
+       hx-swap="innerHTML">
     {% include "partials/records_table.html" %}
   </div>
 </div>
