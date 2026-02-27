@@ -39,16 +39,24 @@ def _to_local_policy_name(record_name: str) -> str:
     """
     Converts a managed FQDN into its UniFi local policy name.
 
+    Replaces only the TLD (last label) with "local", preserving all
+    intermediate labels so the full subdomain structure is retained.
+
     Args:
-        record_name: Managed DNS name, e.g. "home.example.com".
+        record_name: Managed DNS name, e.g. "profilarr.hidden-hive.net".
 
     Returns:
-        Local DNS name, e.g. "home.local".
+        Local DNS name, e.g. "profilarr.hidden-hive.local".
     """
     name = record_name.strip()
     if name.endswith(".local"):
         return name
-    return f"{name.split('.', 1)[0]}.local"
+    # rsplit on the last dot so we keep all intermediate labels intact.
+    parts = name.rsplit(".", 1)
+    if len(parts) == 1:
+        # No dot present — nothing to replace.
+        return name
+    return f"{parts[0]}.local"
 
 
 # ---------------------------------------------------------------------------

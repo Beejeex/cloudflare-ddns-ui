@@ -562,12 +562,24 @@ Minimum required README updates per release:
 - Project Status current version row
 - Any feature/behavior changes introduced in that release
 
+#### Version checklist — every file that must be updated on every release
+
+All four locations must always be updated together. Missing any one will cause a version mismatch.
+
+| File | Location | What to change |
+|---|---|---|
+| `README.md` | Container Registry code block | Pinned tag line: `ghcr.io/beejeex/cloudflare-dns-dashboard:vX.Y.Z` |
+| `README.md` | Project Status table | Add new row; mark previous row as no longer **Current** |
+| `shared_templates.py` | `APP_VERSION = "vX.Y.Z"` | String value |
+| `app.py` | `FastAPI(version="X.Y.Z", ...)` | Numeric string (no leading `v`) |
+
 Release order is mandatory:
 1. Update `README.md` for the new version and changes.
-2. Update in-app version references (for example `shared_templates.py` and `app.py`).
-3. Commit.
-4. Create/push git tag.
-5. Build/push GHCR images (`vX.Y.Z` and `latest`).
+2. Update `shared_templates.py` — `APP_VERSION`.
+3. Update `app.py` — `FastAPI(version=...)`.
+4. Commit.
+5. Create/push git tag.
+6. Build/push GHCR images (`vX.Y.Z` and `latest`).
 
 ---
 
