@@ -209,6 +209,9 @@ async def _ddns_check_job(http_client: httpx.AsyncClient, unifi_http_client: htt
                             level="INFO",
                         )
                         unifi_unchanged += 1
+                    # NOTE: Stamp last_checked so CF-disabled records always show
+                    # a timestamp on the dashboard, not just CF-enabled ones.
+                    stats_repo.record_check(record_name)
                 except UnifiProviderError as exc:
                     log_service.log(
                         f"UniFi: failed to sync '{record_name}' — {exc}",

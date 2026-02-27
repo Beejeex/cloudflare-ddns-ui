@@ -112,6 +112,29 @@ class LogService:
         )
         return list(self._session.exec(statement).all())
 
+    def get_errors_for_record(self, record_name: str, limit: int = 20) -> list[LogEntry]:
+        """
+        Returns the most recent ERROR or WARNING log entries that mention the given record.
+
+        Uses a SQL LIKE filter on the message column since LogEntry has no
+        dedicated record_name field.
+
+        Args:
+            record_name: The FQDN to search for in log messages.
+            limit: Maximum number of entries to return.
+
+        Returns:
+            A list of LogEntry instances matching the record name and level, newest first.
+        """
+        statement = (
+            select(LogEntry)
+            .where(LogEntry.message.contains(record_name))  # type: ignore[attr-defined]
+            .where(LogEntry.level.in_(["ERROR", "WARNING"]))  # type: ignore[attr-defined]
+            .order_by(LogEntry.timestamp.desc())  # type: ignore[arg-type]
+            .limit(limit)
+        )
+        return list(self._session.exec(statement).all())
+
     # ---------------------------------------------------------------------------
     # Cleanup
     # ---------------------------------------------------------------------------

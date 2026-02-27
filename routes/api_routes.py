@@ -337,3 +337,36 @@ async def get_records(
     )
 
     return HTMLResponse(content=records_html + oob)
+
+
+# ---------------------------------------------------------------------------
+# Per-record error log
+# ---------------------------------------------------------------------------
+
+
+@router.get("/logs/record/{record_name:path}", response_class=HTMLResponse)
+async def get_record_error_logs(
+    request: Request,
+    record_name: str,
+    log_service: LogService = Depends(get_log_service),
+) -> HTMLResponse:
+    """
+    Returns recent ERROR/WARNING log entries that mention the given record as an HTML fragment.
+
+    Used by the dashboard to populate the inline error panel when the
+    user clicks on a failure counter.
+
+    Args:
+        request: The incoming FastAPI request.
+        record_name: The FQDN to filter log entries by (path parameter).
+        log_service: Provides log entry access.
+
+    Returns:
+        An HTMLResponse containing a small HTML fragment with the matching entries.
+    """
+    entries = log_service.get_errors_for_record(record_name, limit=20)
+    return templates.TemplateResponse(
+        request,
+        "partials/record_error_log.html",
+        {"entries": entries, "record_name": record_name},
+    )

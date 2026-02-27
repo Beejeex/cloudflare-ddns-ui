@@ -1,0 +1,20 @@
+{# partials/record_error_log.html
+   Responsibility: Renders recent ERROR/WARNING log entries for a single managed record.
+   Returned by GET /api/logs/record/{record_name} and swapped inline by HTMX
+   into #record-errors-{slug} when the user clicks the failure counter.
+#}
+{% if entries %}
+<div class="record-error-log">
+  {% for e in entries %}
+  <div class="rel-row rel-row-{{ e.level | lower }}">
+    <span class="rel-ts">{{ e.timestamp.isoformat()[:16] }}</span>
+    <span class="rel-level">{{ e.level }}</span>
+    <span class="rel-msg">{{ e.message }}</span>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="record-error-log">
+  <span style="color:#94a3b8; font-size:0.78rem;">No error or warning entries found for {{ record_name }}.</span>
+</div>
+{% endif %}

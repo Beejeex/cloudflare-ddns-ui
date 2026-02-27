@@ -356,6 +356,41 @@
       transition: color 0.1s;
     }
     .btn-clear-failures:hover { color: #dc2626; }
+    .btn-failures-toggle {
+      background: none;
+      border: none;
+      cursor: pointer;
+      padding: 0;
+      font-size: 0.78rem;
+      line-height: 1.5;
+      color: inherit;
+    }
+    .btn-failures-toggle:hover { text-decoration: underline; }
+    .record-error-panel {
+      border-top: 1px solid #fee2e2;
+      background: #fff8f8;
+      padding: 0.6rem 1rem;
+    }
+    .record-error-log {
+      display: flex;
+      flex-direction: column;
+      gap: 0.25rem;
+    }
+    .rel-row {
+      display: flex;
+      gap: 0.6rem;
+      font-size: 0.75rem;
+      line-height: 1.5;
+      border-radius: 0.25rem;
+      padding: 0.15rem 0.4rem;
+    }
+    .rel-row-error  { background: #fee2e2; }
+    .rel-row-warning { background: #fef3c7; }
+    .rel-ts   { color: #94a3b8; white-space: nowrap; flex: 0 0 auto; }
+    .rel-level { font-weight: 700; flex: 0 0 50px; }
+    .rel-row-error  .rel-level { color: #dc2626; }
+    .rel-row-warning .rel-level { color: #d97706; }
+    .rel-msg  { color: #334155; word-break: break-word; }
     .record-row-btns {
       flex: 0 0 auto;
       display: flex;
@@ -673,6 +708,21 @@
     {% block content %}{% endblock %}
   </div>
 
+  <script>
+    /**
+     * toggleErrorLog — shows or hides the inline error log panel for a record row.
+     * Called by the failure-count button in records_table.html via onclick.
+     * HTMX loads the panel content on first open (innerHTML swap); subsequent
+     * toggles just show/hide the already-loaded content.
+     *
+     * @param {string} slug - The CSS-safe record slug used in the element id.
+     */
+    function toggleErrorLog(slug) {
+      const panel = document.getElementById('record-errors-' + slug);
+      if (!panel) return;
+      panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+    }
+  </script>
   {% block scripts %}{% endblock %}
 </body>
 </html>

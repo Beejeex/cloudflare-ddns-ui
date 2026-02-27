@@ -59,7 +59,14 @@
     <div class="record-row-stats">
       {{ r.updates }} update{{ 's' if r.updates != 1 else '' }} &middot;
       {% if r.failures > 0 %}
-        <span style="color:#dc2626;">{{ r.failures }} failure{{ 's' if r.failures != 1 else '' }}</span>
+        <button type="button" class="btn-failures-toggle"
+                hx-get="/api/logs/record/{{ r.name }}"
+                hx-target="#record-errors-{{ slug }}"
+                hx-swap="innerHTML"
+                onclick="toggleErrorLog('{{ slug }}')"
+                title="Click to see error log">
+          <span style="color:#dc2626;">{{ r.failures }} failure{{ 's' if r.failures != 1 else '' }}</span> <span style="font-size:0.65rem;">&#9660;</span>
+        </button>
         <form hx-post="/reset-failures" hx-target="#records-container" hx-swap="innerHTML" style="display:inline;">
           <input type="hidden" name="record_name" value="{{ r.name }}">
           <button type="submit" class="btn-clear-failures" title="Clear failures">&#x2715;</button>
@@ -90,6 +97,9 @@
     </div>
 
   </div>{# end .record-row-main #}
+
+  {# ── Inline error log — shown when user clicks the failure counter ── #}
+  <div class="record-error-panel" id="record-errors-{{ slug }}" style="display:none;"></div>
 
   {# ── Expandable config panel — shown/hidden by ⚙ button ── #}
   <div class="record-row-config" id="row-config-{{ slug }}" style="display:none;">
