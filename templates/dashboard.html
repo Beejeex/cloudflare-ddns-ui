@@ -214,6 +214,34 @@
 
 {% block scripts %}
 <script>
+function toggleCfSection(slug, enabled) {
+  var s = document.getElementById('cf-section-' + slug);
+  if (s) {
+    s.style.opacity = enabled ? '' : '0.4';
+    s.style.pointerEvents = enabled ? '' : 'none';
+  }
+}
+
+function toggleStaticIp(slug, show) {
+  var w = document.getElementById('static-ip-wrap-' + slug);
+  if (w) { w.style.visibility = show ? 'visible' : 'hidden'; }
+}
+
+function toggleUnifiSection(slug, enabled) {
+  var d = document.getElementById('unifi-detail-' + slug);
+  var l = document.getElementById('unifi-local-detail-' + slug);
+  if (d) {
+    d.style.opacity = enabled ? '' : '0.4';
+    d.style.pointerEvents = enabled ? '' : 'none';
+  }
+  if (!enabled && l) { l.style.visibility = 'hidden'; }
+}
+
+function toggleUnifiLocal(slug, enabled) {
+  var d = document.getElementById('unifi-local-detail-' + slug);
+  if (d) { d.style.visibility = enabled ? 'visible' : 'hidden'; }
+}
+
 (function () {
   const el = document.getElementById('next-check-countdown');
   let interval = {{ interval | int }};
