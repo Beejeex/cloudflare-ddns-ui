@@ -322,6 +322,54 @@ async def delete_record(
 
 
 # ---------------------------------------------------------------------------
+# Stats
+# ---------------------------------------------------------------------------
+
+
+@router.post("/reset-failures", response_class=HTMLResponse)
+async def reset_failures(
+    request: Request,
+    record_name: str = Form(...),
+    config_service: ConfigService = Depends(get_config_service),
+    stats_service: StatsService = Depends(get_stats_service),
+    record_config_repo: RecordConfigRepository = Depends(get_record_config_repo),
+) -> HTMLResponse:
+    """
+    Resets the failure counter to zero for the given record.
+
+    Returns the updated records-table partial so HTMX can swap it in.
+
+    Args:
+        request: The incoming FastAPI request.
+        record_name: The FQDN whose failure counter to reset.
+        config_service: Provides the current managed records list.
+        stats_service: Resets failures and provides stats for the table.
+        record_config_repo: Provides per-record config for the table.
+
+    Returns:
+        An HTMLResponse containing the records-table partial fragment.
+    """
+    await stats_service.reset_failures(record_name)
+    logger.info("Failures reset for %s.", record_name)
+
+    records = await config_service.get_managed_records()
+    all_stats = await stats_service.get_all()
+    stats_by_name = {s.record_name: s for s in all_stats}
+    cfgs = record_config_repo.get_all(records)
+    _, _, _, unifi_default_ip, unifi_enabled = await config_service.get_unifi_config()
+
+    return templates.TemplateResponse(
+        request,
+        "partials/records_table.html",
+        {
+            "records": _build_record_rows(records, stats_by_name, cfgs),
+            "unifi_enabled": unifi_enabled,
+            "unifi_default_ip": unifi_default_ip,
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
 # Per-record settings
 # ---------------------------------------------------------------------------
 

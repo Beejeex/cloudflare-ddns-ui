@@ -292,17 +292,20 @@
     .record-row-name {
       display: flex;
       align-items: center;
-      gap: 0.5rem;
       flex: 0 0 auto;
       min-width: 0;
-      width: 280px;
-      flex-wrap: wrap;
+      width: 220px;
     }
     .record-name {
       font-size: 0.9rem;
       font-weight: 600;
       color: #1e293b;
       word-break: break-all;
+    }
+    .record-row-badge {
+      flex: 0 0 130px;
+      display: flex;
+      align-items: center;
     }
     .record-row-ips {
       display: flex;
@@ -340,6 +343,19 @@
       text-align: right;
       line-height: 1.5;
     }
+    .btn-clear-failures {
+      background: none;
+      border: none;
+      cursor: pointer;
+      font-size: 0.7rem;
+      color: #94a3b8;
+      padding: 0 0.2rem;
+      line-height: 1;
+      vertical-align: middle;
+      border-radius: 0.25rem;
+      transition: color 0.1s;
+    }
+    .btn-clear-failures:hover { color: #dc2626; }
     .record-row-btns {
       flex: 0 0 auto;
       display: flex;

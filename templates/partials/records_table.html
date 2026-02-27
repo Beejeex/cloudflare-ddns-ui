@@ -10,12 +10,16 @@
     {%- if r.unifi_ip and r.unifi_ip == unifi_target %} accent-unifi-ok{%- else %} accent-unifi{%- endif -%}
   {%- endif %}">
 
-  {# ── Main row: name | IPs | stats | buttons ── #}
+  {# ── Main row: name | badge | IPs | stats | buttons ── #}
   <div class="record-row-main">
 
-    {# Name + status badge #}
+    {# Record name #}
     <div class="record-row-name">
       <span class="record-name font-mono">{{ r.name }}</span>
+    </div>
+
+    {# Status badge — fixed-width column so it always aligns regardless of name length #}
+    <div class="record-row-badge">
       {% if r.cfg_cf_enabled %}
         {% if r.is_up_to_date is none %}<span class="badge badge-neutral">Unknown</span>
         {% elif r.is_up_to_date %}<span class="badge badge-ok">&#10003; CF synced</span>
@@ -54,7 +58,12 @@
     {# Stats #}
     <div class="record-row-stats">
       {{ r.updates }} update{{ 's' if r.updates != 1 else '' }} &middot;
-      {% if r.failures > 0 %}<span style="color:#dc2626;">{{ r.failures }} failure{{ 's' if r.failures != 1 else '' }}</span>
+      {% if r.failures > 0 %}
+        <span style="color:#dc2626;">{{ r.failures }} failure{{ 's' if r.failures != 1 else '' }}</span>
+        <form hx-post="/reset-failures" hx-target="#records-container" hx-swap="innerHTML" style="display:inline;">
+          <input type="hidden" name="record_name" value="{{ r.name }}">
+          <button type="submit" class="btn-clear-failures" title="Clear failures">&#x2715;</button>
+        </form>
       {% else %}0 failures{% endif %}
       {% if r.last_checked %}<br><span style="color:#94a3b8;">{{ r.last_checked[:16] }}</span>{% endif %}
     </div>

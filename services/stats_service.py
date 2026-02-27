@@ -100,6 +100,19 @@ class StatsService:
         """
         return self._repo.get_by_name(record_name)
 
+    async def reset_failures(self, record_name: str) -> RecordStats:
+        """
+        Resets the failure counter to zero for the given DNS record.
+
+        Args:
+            record_name: The fully-qualified DNS name whose failures to clear.
+
+        Returns:
+            The updated RecordStats instance.
+        """
+        logger.info("Stats: failures reset for %s.", record_name)
+        return self._repo.reset_failures(record_name)
+
     async def delete_for_record(self, record_name: str) -> bool:
         """
         Deletes the stats row for the given DNS record.
