@@ -11,6 +11,27 @@ managed by SQLModel.
 
 ---
 
+## Development Model — Local-Only
+
+This is a **local-only development project**. There is no GitHub workflow, no
+CI/CD pipeline, no automated build, and no remote deployment automation.
+
+- Never create or suggest GitHub Actions workflows, CI/CD configs, or any form
+  of automated build/test pipeline. Everything (build, test, run) happens
+  locally on the developer machine.
+- The only GitHub usage is the git remote itself (commits, tags, push) plus
+  GHCR for manual image publication — see "Container Registry" below.
+- **Locally built images ARE pushed to GHCR on every release**, with both a
+  version tag (`vX.Y.Z`) and `latest`. This is a manual `docker build` +
+  `docker push` step on the developer machine — never automated.
+- **Authentication is intentionally out of scope.** This is an internal,
+  trusted-network app. Do not suggest adding auth, CSRF protection, or rate
+  limiting. Only defense-in-depth hygiene items (e.g. masking secrets in the
+  UI, optional CA verification for UniFi) are welcome.
+- The release process is fully manual and version-controlled via git tags.
+
+---
+
 ## Tech Stack
 
 | Layer | Choice | Notes |
@@ -545,7 +566,7 @@ Tag convention:
 - `ghcr.io/beejeex/cloudflare-dns-dashboard:v<version>` — immutable release tag (e.g. `v2.0.1`)
 - `ghcr.io/beejeex/cloudflare-dns-dashboard:latest` — always points to the most recent release
 
-Build and push workflow:
+Build and push workflow (manual — no automation):
 ```bash
 docker build -t cloudflare-dns-dashboard:v<version> -t cloudflare-dns-dashboard:latest .
 docker tag cloudflare-dns-dashboard:v<version> ghcr.io/beejeex/cloudflare-dns-dashboard:v<version>
@@ -553,6 +574,9 @@ docker tag cloudflare-dns-dashboard:latest     ghcr.io/beejeex/cloudflare-dns-da
 docker push ghcr.io/beejeex/cloudflare-dns-dashboard:v<version>
 docker push ghcr.io/beejeex/cloudflare-dns-dashboard:latest
 ```
+
+These commands are run by hand on the developer machine. There is **no** CI
+pipeline that builds or pushes these images — never add one.
 
 Do **not** push to `docker.io` (Docker Hub). The only registry in use is GHCR.
 
@@ -698,3 +722,5 @@ Every check cycle performs two sequential passes:
 - Do not add a `docker-compose.yml` for basic operation — the app is a single container.
 - Do not define custom exceptions inline inside service or route files — all exceptions live in `exceptions.py`.
 - Do not reference `data/ddns.db` anywhere — the DB path is always `/config/ddns.db` to match the Docker volume mount.
+- Do not create GitHub Actions workflows, CI/CD configs, or automated build pipelines — this is a local-only project.
+- Do not suggest authentication, CSRF protection, or rate limiting — auth is intentionally out of scope for this internal app.
