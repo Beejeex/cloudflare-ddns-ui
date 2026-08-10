@@ -47,7 +47,10 @@ async def test_get_public_ip_raises_on_network_error(mock_http):
         side_effect=httpx.ConnectError("timeout")
     )
     async with httpx.AsyncClient() as client:
-        service = IpService(http_client=client)
+        # Single-provider list disables fallback so the failure is terminal.
+        service = IpService(
+            http_client=client, ip_provider_urls=["https://api.ipify.org"]
+        )
         with pytest.raises(IpFetchError):
             await service.get_public_ip()
 
@@ -57,6 +60,118 @@ async def test_get_public_ip_raises_on_http_error(mock_http):
     """IpService must raise IpFetchError when the upstream returns a non-200 status."""
     mock_http.get("https://api.ipify.org").mock(
         return_value=httpx.Response(503)
+    )
+    async with httpx.AsyncClient() as client:
+        # Single-provider list disables fallback so the failure is terminal.
+        service = IpService(
+            http_client=client, ip_provider_urls=["https://api.ipify.org"]
+        )
+        with pytest.raises(IpFetchError):
+            await service.get_public_ip()
+
+
+# ---------------------------------------------------------------------------
+# Retry behaviour
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_public_ip_retries_on_5xx(mock_http):
+    """A transient 5xx must be retried before succeeding."""
+    mock_http.get("https://api.ipify.org").mock(
+        side_effect=[
+            httpx.Response(502),
+            httpx.Response(200, text="1.2.3.4"),
+        ]
+    )
+    async with httpx.AsyncClient() as client:
+        service = IpService(http_client=client)
+        ip = await service.get_public_ip()
+    assert ip == "1.2.3.4"
+    assert len(mock_http.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_get_public_ip_retries_on_network_error(mock_http):
+    """A transient network error must be retried before succeeding."""
+    mock_http.get("https://api.ipify.org").mock(
+        side_effect=[
+            httpx.ConnectError("timeout"),
+            httpx.Response(200, text="1.2.3.4"),
+        ]
+    )
+    async with httpx.AsyncClient() as client:
+        service = IpService(http_client=client)
+        ip = await service.get_public_ip()
+    assert ip == "1.2.3.4"
+    assert len(mock_http.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_get_public_ip_does_not_retry_on_4xx(mock_http):
+    """A 4xx response must fail immediately without retries."""
+    mock_http.get("https://api.ipify.org").mock(
+        return_value=httpx.Response(403)
+    )
+    async with httpx.AsyncClient() as client:
+        # Single-provider list disables fallback so the failure is terminal.
+        service = IpService(
+            http_client=client, ip_provider_urls=["https://api.ipify.org"]
+        )
+        with pytest.raises(IpFetchError):
+            await service.get_public_ip()
+    assert len(mock_http.calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# Fallback chain
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_public_ip_falls_back_to_next_provider(mock_http):
+    """A failing primary provider must roll over to the next one in the chain."""
+    mock_http.get("https://api.ipify.org").mock(
+        side_effect=httpx.ConnectError("timeout")
+    )
+    mock_http.get("https://icanhazip.com").mock(
+        return_value=httpx.Response(200, text="2.2.2.2")
+    )
+    async with httpx.AsyncClient() as client:
+        service = IpService(http_client=client)
+        ip = await service.get_public_ip()
+    assert ip == "2.2.2.2"
+
+
+@pytest.mark.asyncio
+async def test_get_public_ip_falls_back_through_multiple_providers(mock_http):
+    """The chain must be walked until a provider succeeds."""
+    mock_http.get("https://api.ipify.org").mock(
+        return_value=httpx.Response(503)
+    )
+    mock_http.get("https://icanhazip.com").mock(
+        return_value=httpx.Response(500)
+    )
+    mock_http.get("https://ifconfig.me").mock(
+        return_value=httpx.Response(200, text="3.3.3.3")
+    )
+    async with httpx.AsyncClient() as client:
+        service = IpService(http_client=client)
+        ip = await service.get_public_ip()
+    assert ip == "3.3.3.3"
+
+
+@pytest.mark.asyncio
+async def test_get_public_ip_raises_when_all_providers_fail(mock_http):
+    """IpFetchError must be raised only after every provider has been tried."""
+    mock_http.get("https://api.ipify.org").mock(
+        side_effect=httpx.ConnectError("timeout")
+    )
+    mock_http.get("https://icanhazip.com").mock(
+        return_value=httpx.Response(500)
+    )
+    mock_http.get("https://ifconfig.me").mock(
+        side_effect=httpx.ConnectError("refused")
     )
     async with httpx.AsyncClient() as client:
         service = IpService(http_client=client)

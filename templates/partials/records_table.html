@@ -28,7 +28,8 @@
 
     {# ⋯ button anchored to top-right corner #}
     <div class="card-menu-anchor" @click.outside="menu = false">
-      <button type="button" @click.stop="menu = !menu" class="btn-dots" title="Actions">&#8943;</button>
+      <button type="button" @click.stop="menu = !menu" class="btn-dots" title="Actions"
+              aria-label="Actions for {{ r.name }}" aria-haspopup="menu">&#8943;</button>
       <div x-show="menu" x-cloak class="card-menu" style="top:calc(100% + 4px); right:0;">
         <button type="button" class="card-menu-item"
                 @click="expanded = true; menu = false">&#9881;&hairsp; Configure</button>
@@ -178,7 +179,7 @@
 
         {# Cloudflare DDNS section #}
         <div class="row-config-section">
-          <label class="record-cfg-toggle">
+          <label class="record-cfg-toggle" title="Include this record in the Cloudflare DDNS update cycle.">
             <input type="checkbox" name="cf_enabled" value="on"
                    {% if r.cfg_cf_enabled %}checked{% endif %}
                    @change="cfOn = $event.target.checked">
@@ -187,13 +188,13 @@
           <div :style="cfOn ? '' : 'opacity:0.4; pointer-events:none;'"
                style="padding-left:1.3rem; display:flex; flex-direction:column; gap:0.4rem; margin-top:0.4rem;">
             <div style="display:flex; gap:1rem;">
-              <label class="record-cfg-radio">
+              <label class="record-cfg-radio" title="Auto-detect the host's public IP and keep the record in sync.">
                 <input type="radio" name="ip_mode" value="dynamic"
                        {% if r.cfg_ip_mode != 'static' %}checked{% endif %}
                        @change="staticOn = false">
                 <span>Dynamic <span class="text-muted" style="font-size:0.75rem;">(auto-detect)</span></span>
               </label>
-              <label class="record-cfg-radio">
+              <label class="record-cfg-radio" title="Use a fixed external IP; the record is never auto-updated.">
                 <input type="radio" name="ip_mode" value="static"
                        {% if r.cfg_ip_mode == 'static' %}checked{% endif %}
                        @change="staticOn = true">
@@ -221,7 +222,7 @@
                style="padding-left:1.3rem; display:flex; flex-direction:column; gap:0.5rem; margin-top:0.4rem;">
 
             {# Sub-checkbox 1: parent record #}
-            <label class="record-cfg-toggle">
+            <label class="record-cfg-toggle" title="Create or update the UniFi DNS policy for this exact record name.">
               <input type="checkbox" name="unifi_enabled" value="on"
                      :checked="parentOn"
                      @change="toggleParent($event.target.checked)">
@@ -243,7 +244,7 @@
             </div>
 
             {# Sub-checkbox 2: .local record #}
-            <label class="record-cfg-toggle">
+            <label class="record-cfg-toggle" title="Also manage a &lt;host&gt;.local companion UniFi DNS policy.">
               <input type="checkbox" name="unifi_local_enabled" value="on"
                      :checked="localOn"
                      @change="toggleLocal($event.target.checked)">

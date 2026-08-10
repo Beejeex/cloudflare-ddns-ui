@@ -11,12 +11,20 @@ manage log file I/O.
 from __future__ import annotations
 
 import logging
+import time
 
 import tldextract
 
 from cloudflare.dns_provider import DnsRecord, DNSProvider
 from db.models import RecordConfig
 from exceptions import DnsProviderError, IpFetchError
+from metrics import (
+    ddns_checks_total,
+    ddns_cycle_duration_seconds,
+    ddns_failures_total,
+    ddns_updates_total,
+)
+from services.history_service import HistoryService
 from services.ip_service import IpService
 from services.log_service import LogService
 from services.stats_service import StatsService
@@ -31,7 +39,8 @@ class DnsService:
     For each managed record, compares the IP stored in the DNS provider
     against the host's current public IP and updates the record when they
     differ.  All results are recorded by StatsService and surfaced via
-    LogService.
+    LogService; successful IP transitions are appended to the per-record
+    history timeline by HistoryService.
 
     Collaborators:
         - DNSProvider: abstract interface satisfied by CloudflareClient (or
@@ -39,6 +48,7 @@ class DnsService:
         - IpService: provides the current public IP
         - StatsService: records update/failure counts per record
         - LogService: writes UI-visible activity log entries
+        - HistoryService: appends IP changes to the per-record timeline
     """
 
     def __init__(
@@ -47,6 +57,7 @@ class DnsService:
         ip_service: IpService,
         stats_service: StatsService,
         log_service: LogService,
+        history_service: HistoryService | None = None,
     ) -> None:
         """
         Initialises the service with all required collaborators.
@@ -56,11 +67,14 @@ class DnsService:
             ip_service: Provides the current public IP of the host machine.
             stats_service: Records per-record check/update/failure stats.
             log_service: Writes UI-visible log entries for all DDNS events.
+            history_service: Optional per-record IP history tracker. When None
+                (e.g. in unit tests) no timeline entries are written.
         """
         self._provider = dns_provider
         self._ip_service = ip_service
         self._stats = stats_service
         self._log = log_service
+        self._history = history_service
 
     # ---------------------------------------------------------------------------
     # Public API
@@ -71,6 +85,7 @@ class DnsService:
         managed_records: list[str],
         zones: dict[str, str],
         record_configs: dict[str, RecordConfig] | None = None,
+        batch_commits: bool = True,
     ) -> None:
         """
         Runs a single DDNS check/update cycle for all managed records.
@@ -81,6 +96,11 @@ class DnsService:
         - ip_mode='static'  → uses cfg.static_ip instead of the public IP
         - ip_mode='dynamic' → uses the detected public IP (default behaviour)
 
+        When ``batch_commits`` is True (default) all per-record stats and log
+        writes are accumulated and committed with a single flush at the end,
+        instead of one DB commit per record.  Single-record callers
+        (check_record_now) always commit immediately.
+
         Args:
             managed_records: List of FQDNs to check, e.g. ["home.example.com"].
             zones: Mapping of base domain to provider zone ID,
@@ -88,6 +108,7 @@ class DnsService:
             record_configs: Optional per-record config map returned by
                 RecordConfigRepository.get_all(). When None all records
                 default to CF-enabled, dynamic mode.
+            batch_commits: Whether to defer commits until the end of the cycle.
 
         Returns:
             None
@@ -110,17 +131,27 @@ class DnsService:
                 for r in managed_records
             )
             if not all_static:
-                self._log.log(f"Could not fetch public IP: {exc}", level="ERROR")
+                self._log.log(
+                    f"Could not fetch public IP: {exc}",
+                    level="ERROR",
+                    commit=not batch_commits,
+                )
                 logger.error("IP fetch failed; aborting check cycle: %s", exc)
                 return
             logger.warning("IP fetch failed but all records are static — continuing: %s", exc)
 
         logger.info("Check cycle started — current IP: %s", current_ip)
-        self._log.log(f"Check cycle started. Current public IP: {current_ip or 'N/A (static mode)'}", level="INFO")
+        self._log.log(
+            f"Check cycle started. Current public IP: {current_ip or 'N/A (static mode)'}",
+            level="INFO",
+            commit=not batch_commits,
+        )
 
         updated_count = 0
         skipped_count = 0
         failed_count = 0
+
+        cycle_start = time.monotonic()
 
         for record_name in managed_records:
             cfg = configs.get(record_name)
@@ -131,10 +162,11 @@ class DnsService:
                 # Auto-clear any stale failures that accumulated while CF was enabled.
                 prior_stats = await self._stats.get_for_record(record_name)
                 if prior_stats and prior_stats.failures > 0:
-                    await self._stats.reset_failures(record_name)
+                    await self._stats.reset_failures(record_name, commit=not batch_commits)
                     self._log.log(
                         f"Cloudflare: {record_name} — stale failure(s) cleared (CF disabled).",
                         level="INFO",
+                        commit=not batch_commits,
                     )
                 skipped_count += 1
                 continue
@@ -148,12 +180,15 @@ class DnsService:
                     self._log.log(
                         f"Skipped {record_name}: public IP unavailable and no static IP configured.",
                         level="WARNING",
+                        commit=not batch_commits,
                     )
                     skipped_count += 1
                     continue
                 target_ip = current_ip
 
-            result = await self._check_record(record_name, target_ip, zones)
+            result = await self._check_record(
+                record_name, target_ip, zones, commit=not batch_commits
+            )
             if result == "updated":
                 updated_count += 1
             elif result == "failed":
@@ -168,7 +203,66 @@ class DnsService:
             summary_parts.append(f"{updated_count} updated")
         if failed_count:
             summary_parts.append(f"{failed_count} failed")
-        self._log.log("Cloudflare pass: " + ", ".join(summary_parts) + ".", level="INFO")
+        self._log.log(
+            "Cloudflare pass: " + ", ".join(summary_parts) + ".",
+            level="INFO",
+            commit=not batch_commits,
+        )
+
+        # Single commit for the whole cycle when batching is enabled
+        if batch_commits:
+            self._log.flush()
+
+        ddns_cycle_duration_seconds.observe(time.monotonic() - cycle_start)
+
+    async def check_record_now(
+        self,
+        record_name: str,
+        cfg: RecordConfig | None,
+        zones: dict[str, str],
+    ) -> str:
+        """
+        Runs an immediate DDNS check for a single record (per-record "Check Now").
+
+        Respects the record's per-record config: CF-disabled records are
+        skipped, static-IP records are checked against their static IP, and
+        dynamic records against the current public IP. Uses the same
+        _check_record() path as the scheduler cycle, so stats and logs stay
+        consistent with scheduled runs.
+
+        Args:
+            record_name: The FQDN to check.
+            cfg: The record's per-record config (defaults when None).
+            zones: Mapping of base domain to provider zone ID.
+
+        Returns:
+            "updated"   — the record was updated
+            "unchanged" — the record was already correct
+            "skipped"   — Cloudflare DDNS is disabled for this record
+            "failed"    — an error occurred or the public IP is unavailable
+        """
+        if cfg is not None and not cfg.cf_enabled:
+            self._log.log(
+                f"Cloudflare DDNS disabled for {record_name} — skipping manual check.",
+                level="WARNING",
+            )
+            return "skipped"
+
+        if cfg is not None and cfg.ip_mode == "static" and cfg.static_ip:
+            target_ip = cfg.static_ip
+        else:
+            try:
+                target_ip = await self._ip_service.get_public_ip()
+            except IpFetchError as exc:
+                self._log.log(
+                    f"Could not fetch public IP for {record_name}: {exc}",
+                    level="ERROR",
+                )
+                await self._stats.record_failed(record_name)
+                ddns_failures_total.labels(record_name).inc()
+                return "failed"
+
+        return await self._check_record(record_name, target_ip, zones, source="manual")
 
     async def fetch_zone_record_map(
         self,
@@ -295,6 +389,8 @@ class DnsService:
             raise DnsProviderError(f"No zone configured for record: {record_name}")
         record = await self._provider.create_record(zone_id, record_name, ip)
         self._log.log(f"Created DNS record: {record_name} → {ip}", level="INFO")
+        if self._history is not None:
+            self._history.record_ip_change(record_name, ip, source="create")
         return record
 
     async def delete_dns_record(
@@ -323,6 +419,8 @@ class DnsService:
         await self._provider.delete_record(zone_id, record_id)
         self._log.log(f"Deleted DNS record: {record_name}", level="INFO")
         await self._stats.delete_for_record(record_name)
+        if self._history is not None:
+            self._history.delete_for_record(record_name)
 
     # ---------------------------------------------------------------------------
     # Internal helpers
@@ -333,6 +431,8 @@ class DnsService:
         record_name: str,
         target_ip: str,
         zones: dict[str, str],
+        commit: bool = True,
+        source: str = "scheduler",
     ) -> str:
         """
         Checks a single DNS record and updates it if the IP has changed.
@@ -340,13 +440,17 @@ class DnsService:
         All outcomes (up-to-date, updated, failed) are recorded in stats
         and the log service. If the record had prior failures and the current
         check succeeds, the failure counter is automatically reset to zero
-        and a recovery entry is written to the activity log.
+        and a recovery entry is written to the activity log.  Successful IP
+        transitions are appended to the per-record history timeline.
 
         Args:
             record_name: The FQDN to check.
             target_ip: The desired IP for the record. May be the current public IP
                 (dynamic mode) or a user-configured static IP.
             zones: Mapping of base domain to provider zone ID.
+            commit: Whether stats/log writes commit immediately.  False defers
+                the commit to the caller's single flush at cycle end.
+            source: Who triggered the check ("scheduler" or "manual").
 
         Returns:
             "updated"   — record was updated
@@ -358,8 +462,10 @@ class DnsService:
             self._log.log(
                 f"No zone configured for {record_name} — skipping.",
                 level="WARNING",
+                commit=commit,
             )
-            await self._stats.record_failed(record_name)
+            await self._stats.record_failed(record_name, commit=commit)
+            ddns_failures_total.labels(record_name).inc()
             return "failed"
 
         try:
@@ -369,33 +475,44 @@ class DnsService:
             prior_failures = prior_stats.failures if prior_stats is not None else 0
 
             dns_record = await self._provider.get_record(zone_id, record_name)
-            await self._stats.record_checked(record_name)
+            ddns_checks_total.labels(record_name).inc()
+            await self._stats.record_checked(record_name, commit=commit)
 
             if dns_record is None:
                 # Record doesn't exist in Cloudflare yet — create it automatically.
                 self._log.log(
                     f"Cloudflare: record not found — creating {record_name} → {target_ip}…",
                     level="INFO",
+                    commit=commit,
                 )
                 await self._provider.create_record(zone_id, record_name, target_ip)
                 self._log.log(
                     f"Cloudflare: created {record_name} → {target_ip} ✓",
                     level="INFO",
+                    commit=commit,
                 )
-                await self._stats.record_updated(record_name)
+                await self._stats.record_updated(record_name, commit=commit)
                 if prior_failures > 0:
-                    await self._stats.reset_failures(record_name)
+                    await self._stats.reset_failures(record_name, commit=commit)
+                if self._history is not None:
+                    self._history.record_ip_change(record_name, target_ip, source=source)
+                ddns_updates_total.labels(record_name).inc()
                 return "updated"
 
             if dns_record.content == target_ip:
                 logger.debug("%s is already up to date (%s).", record_name, target_ip)
-                self._log.log(f"Cloudflare: {record_name} already up to date ({target_ip}).", level="INFO")
+                self._log.log(
+                    f"Cloudflare: {record_name} already up to date ({target_ip}).",
+                    level="INFO",
+                    commit=commit,
+                )
                 # Auto-reset failures on recovery after previous failures.
                 if prior_failures > 0:
-                    await self._stats.reset_failures(record_name)
+                    await self._stats.reset_failures(record_name, commit=commit)
                     self._log.log(
                         f"Cloudflare: {record_name} recovered — {prior_failures} failure(s) cleared.",
                         level="INFO",
+                        commit=commit,
                     )
                     logger.info("Recovery: %s failure count reset after %d prior failure(s).", record_name, prior_failures)
                 return "unchanged"
@@ -404,26 +521,37 @@ class DnsService:
             self._log.log(
                 f"Cloudflare: IP change detected for {record_name} — {dns_record.content} → {target_ip}. Updating…",
                 level="INFO",
+                commit=commit,
             )
             updated = await self._provider.update_record(zone_id, dns_record, target_ip)
             self._log.log(
                 f"Cloudflare: updated {updated.name} → {target_ip} ✓",
                 level="INFO",
+                commit=commit,
             )
-            await self._stats.record_updated(record_name)
+            await self._stats.record_updated(record_name, commit=commit)
             # Auto-reset failures on recovery after previous failures.
             if prior_failures > 0:
-                await self._stats.reset_failures(record_name)
+                await self._stats.reset_failures(record_name, commit=commit)
                 self._log.log(
                     f"Cloudflare: {record_name} recovered — {prior_failures} failure(s) cleared.",
                     level="INFO",
+                    commit=commit,
                 )
                 logger.info("Recovery: %s failure count reset after %d prior failure(s).", record_name, prior_failures)
+            if self._history is not None:
+                self._history.record_ip_change(record_name, target_ip, source=source)
+            ddns_updates_total.labels(record_name).inc()
             return "updated"
 
         except DnsProviderError as exc:
-            self._log.log(f"Cloudflare: failed to update {record_name} — {exc}", level="ERROR")
-            await self._stats.record_failed(record_name)
+            self._log.log(
+                f"Cloudflare: failed to update {record_name} — {exc}",
+                level="ERROR",
+                commit=commit,
+            )
+            await self._stats.record_failed(record_name, commit=commit)
+            ddns_failures_total.labels(record_name).inc()
             logger.error("DnsProviderError for %s: %s", record_name, exc)
             return "failed"
 

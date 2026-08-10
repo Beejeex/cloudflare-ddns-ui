@@ -23,6 +23,35 @@
   </div>
 </div>
 
+{# ---- First-run onboarding (no token/zones configured yet) ---- #}
+{% if first_run %}
+<div class="card mb-2">
+  <div class="card-header">
+    <span class="card-title">&#128640; Get started</span>
+  </div>
+  <div class="card-body">
+    <ol style="margin:0; padding-left:1.25rem; display:flex; flex-direction:column; gap:0.75rem;">
+      <li>
+        <strong>Add your Cloudflare API token</strong> — go to
+        <a href="/settings">Settings</a>, paste a token with
+        <code>Zone:DNS:Edit</code> permission, and click <em>Verify &amp; fetch zones</em>.
+      </li>
+      <li>
+        <strong>Pick your zones</strong> — zones returned by the verify step appear as
+        click-to-add buttons; check the domain → zone ID pairs and save.
+      </li>
+      <li>
+        <strong>Add your first record</strong> — use the <em>Create New A-Record</em>
+        form below, or click <em>+ Manage</em> on any discovered hostname.
+      </li>
+    </ol>
+    <div style="margin-top:1rem;">
+      <a href="/settings" class="btn btn-primary btn-sm">Go to Settings</a>
+    </div>
+  </div>
+</div>
+{% endif %}
+
 {# ---- Cloudflare API error banner ---- #}
 {% if api_error %}
 <div class="alert" style="background:#fef3c7; color:#92400e; border:1px solid #fde68a; display:flex; align-items:center; gap:0.75rem; margin-bottom:1rem;">
@@ -145,6 +174,30 @@
       </span>
       {% endif %}
 
+      {# Bulk actions — apply a flag to every managed record in one click #}
+      <div style="display:flex; gap:0.25rem; align-items:center;">
+        <button class="btn btn-ghost btn-sm" style="font-size:0.75rem;"
+                hx-post="/bulk-set-cf" hx-vals='{"enabled":"true"}' hx-swap="none"
+                hx-confirm="Enable Cloudflare DDNS for all managed records?">
+          CF on
+        </button>
+        <button class="btn btn-ghost btn-sm" style="font-size:0.75rem;"
+                hx-post="/bulk-set-cf" hx-vals='{"enabled":"false"}' hx-swap="none"
+                hx-confirm="Disable Cloudflare DDNS for all managed records?">
+          CF off
+        </button>
+        <button class="btn btn-ghost btn-sm" style="font-size:0.75rem;"
+                hx-post="/bulk-set-unifi" hx-vals='{"enabled":"true"}' hx-swap="none"
+                hx-confirm="Enable UniFi DNS for all managed records?">
+          UniFi on
+        </button>
+        <button class="btn btn-ghost btn-sm" style="font-size:0.75rem;"
+                hx-post="/bulk-set-unifi" hx-vals='{"enabled":"false"}' hx-swap="none"
+                hx-confirm="Disable UniFi DNS for all managed records?">
+          UniFi off
+        </button>
+      </div>
+
       {# Sync Now #}
       <button id="sync-now-btn"
               hx-post="/api/trigger-sync"
@@ -234,14 +287,23 @@
           <form hx-post="/remove-from-managed" hx-swap="none"
                 hx-confirm="Remove {{ r.name }} from managed? DNS record stays in Cloudflare.">
             <input type="hidden" name="record_name" value="{{ r.name }}">
-            <button type="submit" class="card-toggle card-toggle-on" title="Remove from managed"></button>
+            <button type="submit" class="card-toggle card-toggle-on" role="switch" aria-checked="true"
+                    aria-label="Remove {{ r.name }} from managed" title="Remove from managed"></button>
           </form>
           <span style="font-size:0.67rem; font-weight:700; text-transform:uppercase;
                        letter-spacing:0.07em; color:{{ clabel }};">&#10003; Managed</span>
         </div>
         <div class="card-menu-anchor" @click.outside="menu = false">
-          <button type="button" @click.stop="menu = !menu" class="btn-dots" title="Actions">&#8943;</button>
+          <button type="button" @click.stop="menu = !menu" class="btn-dots" title="Actions"
+                  aria-label="Actions for {{ r.name }}" aria-haspopup="menu">&#8943;</button>
           <div x-show="menu" x-cloak class="card-menu" style="top:calc(100% + 4px); right:0;">
+            <button type="button" class="card-menu-item"
+                    hx-post="/check-record"
+                    hx-vals='{"record_name": "{{ r.name }}"}'
+                    hx-target="#check-status-{{ slug }}"
+                    hx-swap="innerHTML"
+                    hx-indicator="#check-status-{{ slug }}"
+                    @click="menu = false">&#128260;&hairsp; Check now</button>
             <button type="button" class="card-menu-item"
                     @click="expanded = true; menu = false">&#9881;&hairsp; Configure</button>
           </div>
@@ -327,6 +389,9 @@
         {% if r.last_checked %}<br><span style="color:#94a3b8;">{{ r.last_checked[:16] }}</span>{% endif %}
       </div>
 
+      {# Per-record manual check status (HTMX swap target for /check-record) #}
+      <span id="check-status-{{ slug }}" style="min-height:1rem;"></span>
+
     </div>{# end managed card body #}
 
     {# Inline error log panel #}
@@ -367,7 +432,7 @@
 
                 {# Cloudflare DDNS section #}
                 <div class="row-config-section">
-                  <label class="record-cfg-toggle">
+                  <label class="record-cfg-toggle" title="Include this record in the Cloudflare DDNS update cycle.">
                     <input type="checkbox" name="cf_enabled" value="on"
                            {% if r.cfg_cf_enabled %}checked{% endif %}
                            @change="cfOn = $event.target.checked">
@@ -376,13 +441,13 @@
                   <div :style="cfOn ? '' : 'opacity:0.4; pointer-events:none;'"
                        style="padding-left:1.3rem; display:flex; flex-direction:column; gap:0.4rem; margin-top:0.4rem;">
                     <div style="display:flex; gap:1rem;">
-                      <label class="record-cfg-radio">
+                      <label class="record-cfg-radio" title="Auto-detect the host's public IP and keep the record in sync.">
                         <input type="radio" name="ip_mode" value="dynamic"
                                {% if r.cfg_ip_mode != 'static' %}checked{% endif %}
                                @change="staticOn = false">
                         <span>Dynamic <span class="text-muted" style="font-size:0.75rem;">(auto-detect)</span></span>
                       </label>
-                      <label class="record-cfg-radio">
+                      <label class="record-cfg-radio" title="Use a fixed external IP; the record is never auto-updated.">
                         <input type="radio" name="ip_mode" value="static"
                                {% if r.cfg_ip_mode == 'static' %}checked{% endif %}
                                @change="staticOn = true">
@@ -402,7 +467,7 @@
                 <div class="row-config-section">
                   <span style="font-weight:600; color:#7c3aed;">UniFi DNS</span>
                   <div style="padding-left:1.3rem; display:flex; flex-direction:column; gap:0.5rem; margin-top:0.4rem;">
-                    <label class="record-cfg-toggle">
+                    <label class="record-cfg-toggle" title="Create or update the UniFi DNS policy for this exact record name.">
                       <input type="checkbox" name="unifi_enabled" value="on"
                              :checked="parentOn"
                              @change="parentOn = $event.target.checked">
@@ -421,7 +486,7 @@
                         {% else %}Will create policy on next check{% endif %}
                       </span>
                     </div>
-                    <label class="record-cfg-toggle">
+                    <label class="record-cfg-toggle" title="Also manage a &lt;host&gt;.local companion UniFi DNS policy.">
                       <input type="checkbox" name="unifi_local_enabled" value="on"
                              :checked="localOn"
                              @change="localOn = $event.target.checked">
@@ -449,6 +514,21 @@
                 <span id="cfg-status-{{ slug }}" class="text-sm text-muted"></span>
               </div>
             </form>
+
+            {# Per-record IP change history — loaded on demand into the modal #}
+            <div style="margin-top:1rem; border-top:1px solid #f1f5f9; padding-top:0.85rem;">
+              <div style="display:flex; align-items:center; gap:0.5rem;">
+                <button type="button" class="btn btn-ghost btn-sm"
+                        hx-get="/api/records/{{ r.name }}/history"
+                        hx-target="#history-{{ slug }}"
+                        hx-swap="innerHTML"
+                        hx-indicator="#history-spinner-{{ slug }}"
+                        style="font-size:0.78rem;">&#128337;&hairsp; IP change history</button>
+                <span id="history-spinner-{{ slug }}" class="htmx-indicator"
+                      style="font-size:0.75rem; color:#64748b;">loading…</span>
+              </div>
+              <div id="history-{{ slug }}" style="margin-top:0.5rem;"></div>
+            </div>
           </div>{# end modal body / x-data #}
         </div>{# end modal panel #}
       </div>{# end modal overlay #}
@@ -487,13 +567,15 @@
       {# UNMANAGED label + dot-menu — toggle switch handles add-to-managed #}
       <div style="display:flex; align-items:center; justify-content:space-between;">
         <div style="display:flex; align-items:center; gap:0.45rem;">
-          <button type="button" class="card-toggle card-toggle-off" title="Configure & add to managed"
+          <button type="button" class="card-toggle card-toggle-off" role="switch" aria-checked="false"
+                  aria-label="Configure and add {{ r.name }} to managed" title="Configure & add to managed"
                   @click="addModal = true"></button>
           <span style="font-size:0.67rem; font-weight:700; text-transform:uppercase;
                        letter-spacing:0.07em; color:#94a3b8;">Unmanaged</span>
         </div>
         <div class="card-menu-anchor" @click.outside="menu = false">
-          <button type="button" @click.stop="menu = !menu" class="btn-dots" title="Actions">&#8943;</button>
+          <button type="button" @click.stop="menu = !menu" class="btn-dots" title="Actions"
+                  aria-label="Actions for {{ r.name }}" aria-haspopup="menu">&#8943;</button>
           <div x-show="menu" x-cloak class="card-menu" style="top:calc(100% + 4px); right:0;">
             {% if r.cf_record_id %}
             <form hx-post="/delete-record"
@@ -749,6 +831,7 @@ document.addEventListener('htmx:afterRequest', function(evt) {
   const reloadPaths = [
     '/add-to-managed', '/add-to-managed-configured', '/remove-from-managed', '/create-record',
     '/delete-record',   '/delete-unifi-record',  '/reset-updates',
+    '/bulk-set-cf',     '/bulk-set-unifi',
   ];
   if (reloadPaths.some(p => path === p || path.startsWith(p + '?'))) {
     safeReload();

@@ -13,7 +13,10 @@
     <div id="config-status"></div>
 
     <form id="settings-form"
-          x-data="{ zones: [], showToken: false }"
+          x-data="{ zones: [], showToken: false,
+                    addZone(domain, zone_id) {
+                      if (!this.zones.some(z => z.domain === domain)) { this.zones.push({ domain, zone_id }); }
+                    } }"
           x-init="
             zones = Object.entries({{ zones }}).map(([d, z]) => ({ domain: d, zone_id: z }));
             $el.addEventListener('htmx:configRequest', e => {
@@ -35,11 +38,23 @@
           <button type="button" class="addon-btn"
                   @click="showToken = !showToken"
                   :title="showToken ? 'Hide token' : 'Show token'">
-            <span x-text="showToken ? '&#128064;' : '&#128065;'">&#128065;</span>
+            <span x-text="showToken ? '&#128064;' : '&#128065;'" style="pointer-events:none;">&#128065;</span>
           </button>
         </div>
-        <small>Cloudflare API token with <strong>Zone:DNS:Edit</strong> permission.</small>
-      </div>
+        <small>Cloudflare API token with <strong>Zone:DNS:Edit</strong> permission.
+          {% if api_token %}A token is stored (<code>{{ api_token }}</code>). Paste a new one to replace it, or leave as-is to keep it.{% endif %}
+        </small>
+          <div style="display:flex; align-items:center; gap:0.5rem; margin-top:0.35rem;">
+            <button type="button" class="btn btn-secondary btn-sm"
+                    hx-post="/api/verify-token"
+                    hx-include="#api_token"
+                    hx-target="#token-verify-status"
+                    hx-swap="innerHTML"
+                    hx-indicator="#token-verify-spinner"
+                    style="white-space:nowrap;">Verify &amp; fetch zones</button>
+            <span id="token-verify-spinner" class="htmx-indicator">&#8230;</span>
+          </div>
+          <div id="token-verify-status" style="margin-top:0.35rem;"></div>
 
       {# ---- Zones ---- #}
       <div class="form-group">
@@ -72,7 +87,7 @@
       </div>
 
       {# ---- Intervals ---- #}
-      <div style="display:grid; grid-template-columns:1fr 1fr; gap:1rem;">
+      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:1rem;">
         <div class="form-group" style="margin-bottom:0;">
           <label for="interval">Check Interval (seconds)</label>
           <input type="number" id="interval" name="interval"
@@ -85,6 +100,13 @@
           <input type="number" id="refresh" name="refresh"
                  value="{{ refresh }}" min="5">
           <small>Log page auto-refresh rate.</small>
+        </div>
+
+        <div class="form-group" style="margin-bottom:0;">
+          <label for="log_retention_days">Log Retention (days)</label>
+          <input type="number" id="log_retention_days" name="log_retention_days"
+                 value="{{ log_retention_days }}" min="1">
+          <small>Days to keep activity logs.</small>
         </div>
       </div>
 
@@ -157,13 +179,15 @@ subjects:
         <small>IP address or hostname of your local UniFi Network Application. SSL is not verified (self-signed cert).</small>
       </div>
 
-      <div style="display:grid; grid-template-columns:1fr 1fr; gap:1rem; margin-top:0.75rem;">
+      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:1rem; margin-top:0.75rem;">
         <div class="form-group" style="margin-bottom:0;">
           <label for="unifi_api_key">UniFi API Key</label>
           <input type="password" id="unifi_api_key" name="unifi_api_key"
                  value="{{ unifi_api_key }}" autocomplete="off"
                  placeholder="Paste your API key here">
-          <small>From your UniFi controller &rarr; Settings &rarr; Admins &amp; Users &rarr; API Keys.</small>
+          <small>From your UniFi controller &rarr; Settings &rarr; Admins &amp; Users &rarr; API Keys.
+            {% if unifi_api_key %}A key is stored (<code>{{ unifi_api_key }}</code>). Paste a new one to replace it, or leave as-is to keep it.{% endif %}
+          </small>
         </div>
         <div class="form-group" style="margin-bottom:0;">
           <label for="unifi_site_id">UniFi Site ID (UUID)</label>
@@ -173,7 +197,7 @@ subjects:
                    placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
                    style="flex:1;">
             <button type="button" class="btn btn-secondary btn-sm"
-                    hx-get="/api/unifi/sites"
+                    hx-post="/api/unifi/sites"
                     hx-include="[name='unifi_host'],[name='unifi_api_key']"
                     hx-target="#site-picker"
                     hx-swap="innerHTML"
@@ -194,6 +218,19 @@ subjects:
                value="{{ unifi_default_ip }}" autocomplete="off"
                placeholder="172.20.9.100">
         <small>Pre-filled when creating new UniFi DNS policies from the dashboard (e.g. your ingress load-balancer IP).</small>
+      </div>
+
+      {# ---- Backup / Migration ---- #}
+      <div class="form-group" style="margin-top:1.5rem; padding-top:1.5rem; border-top:1px solid #e2e8f0;">
+        <label style="font-weight:600; font-size:0.9rem; color:#334155;">Backup / Migration</label>
+        <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+          <a class="btn btn-secondary btn-sm" href="/api/export" download>Export config</a>
+          <input type="file" id="import-file" accept="application/json,application/octet-stream"
+                 style="font-size:0.8rem; max-width:220px;">
+          <button type="button" class="btn btn-secondary btn-sm" id="import-btn">Import config</button>
+        </div>
+        <small>Export downloads all settings, managed records, and per-record config as JSON for backup or migration.</small>
+        <div id="import-status" style="margin-top:0.35rem; font-size:0.8rem;"></div>
       </div>
 
       <div style="margin-top:1.5rem;">
@@ -274,4 +311,36 @@ subjects:
     padding: 0 0.1rem;
   }
 </style>
+
+<script>
+  // Import config: read the chosen JSON file and POST it to /api/import.
+  document.getElementById('import-btn').addEventListener('click', async () => {
+    const file = document.getElementById('import-file').files[0];
+    const status = document.getElementById('import-status');
+    if (!file) {
+      status.innerHTML = '<span style="color:#dc2626;">Choose a JSON file first.</span>';
+      return;
+    }
+    try {
+      const text = await file.text();
+      const resp = await fetch('/api/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: text,
+      });
+      const data = await resp.json();
+      if (resp.ok) {
+        status.innerHTML =
+          '<span style="color:#16a34a;">Imported ' + data.records + ' record(s), ' +
+          data.zones + ' zone(s). Reloading…</span>';
+        setTimeout(() => location.reload(), 800);
+      } else {
+        status.innerHTML =
+          '<span style="color:#dc2626;">Import failed: ' + (data.detail || 'error') + '</span>';
+      }
+    } catch (e) {
+      status.innerHTML = '<span style="color:#dc2626;">Import failed: ' + e + '</span>';
+    }
+  });
+</script>
 {% endblock %}

@@ -9,11 +9,11 @@ Does NOT: contain business logic, IP fetching, or log parsing.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
 
 from sqlmodel import Session, select
 
 from db.models import RecordStats
+from utils import utcnow_naive
 
 logger = logging.getLogger(__name__)
 
@@ -42,12 +42,16 @@ class StatsRepository:
     # Public API
     # ---------------------------------------------------------------------------
 
-    def get_or_create(self, record_name: str) -> RecordStats:
+    def get_or_create(self, record_name: str, commit: bool = True) -> RecordStats:
         """
         Returns the RecordStats row for the given FQDN, creating it if absent.
 
+        Pass ``commit=False`` when batching a check cycle so the row is
+        created without an immediate commit; the cycle flushes once at the end.
+
         Args:
             record_name: The fully-qualified DNS name, e.g. "home.example.com".
+            commit: Whether to commit a newly created row immediately.
 
         Returns:
             The RecordStats ORM instance for the given record name.
@@ -59,8 +63,9 @@ class StatsRepository:
             logger.debug("Creating RecordStats row for %s.", record_name)
             stats = RecordStats(record_name=record_name)
             self._session.add(stats)
-            self._session.commit()
-            self._session.refresh(stats)
+            if commit:
+                self._session.commit()
+                self._session.refresh(stats)
 
         return stats
 
@@ -109,91 +114,102 @@ class StatsRepository:
         statement = select(RecordStats).where(RecordStats.record_name == record_name)
         return self._session.exec(statement).first()
 
-    def save(self, stats: RecordStats) -> RecordStats:
+    def save(self, stats: RecordStats, commit: bool = True) -> RecordStats:
         """
         Persists a RecordStats instance to the database.
 
+        Pass ``commit=False`` when batching a check cycle so the mutation is
+        applied without an immediate commit; the cycle flushes once at the end.
+
         Args:
             stats: The RecordStats instance to save.
+            commit: Whether to commit immediately.
 
         Returns:
-            The refreshed RecordStats instance after commit.
+            The refreshed RecordStats instance after commit (unchanged when
+            commit=False, since a refresh requires a commit).
         """
         self._session.add(stats)
-        self._session.commit()
-        self._session.refresh(stats)
+        if commit:
+            self._session.commit()
+            self._session.refresh(stats)
         return stats
 
-    def record_check(self, record_name: str) -> RecordStats:
+    def record_check(self, record_name: str, commit: bool = True) -> RecordStats:
         """
         Updates the last_checked timestamp for the given record.
 
         Args:
             record_name: The fully-qualified DNS name that was just checked.
+            commit: Whether to commit immediately (False = batched cycle).
 
         Returns:
             The updated RecordStats instance.
         """
-        stats = self.get_or_create(record_name)
-        stats.last_checked = datetime.now(timezone.utc).replace(tzinfo=None)
-        return self.save(stats)
+        stats = self.get_or_create(record_name, commit=commit)
+        stats.last_checked = utcnow_naive()
+        return self.save(stats, commit=commit)
 
-    def record_update(self, record_name: str) -> RecordStats:
+    def record_update(self, record_name: str, commit: bool = True) -> RecordStats:
         """
         Increments the update counter and sets last_updated for the given record.
 
         Args:
             record_name: The fully-qualified DNS name that was just updated.
+            commit: Whether to commit immediately (False = batched cycle).
 
         Returns:
             The updated RecordStats instance.
         """
-        stats = self.get_or_create(record_name)
-        stats.last_updated = datetime.now(timezone.utc).replace(tzinfo=None)
+        stats = self.get_or_create(record_name, commit=commit)
+        stats.last_updated = utcnow_naive()
         stats.updates += 1
-        return self.save(stats)
+        return self.save(stats, commit=commit)
 
-    def record_failure(self, record_name: str) -> RecordStats:
+    def record_failure(self, record_name: str, commit: bool = True) -> RecordStats:
         """
         Increments the failure counter for the given record.
 
         Args:
             record_name: The fully-qualified DNS name whose update failed.
+            commit: Whether to commit immediately (False = batched cycle).
 
         Returns:
             The updated RecordStats instance.
         """
-        stats = self.get_or_create(record_name)
+        stats = self.get_or_create(record_name, commit=commit)
         stats.failures += 1
-        return self.save(stats)
+        return self.save(stats, commit=commit)
 
-    def reset_failures(self, record_name: str) -> RecordStats:
+    def reset_failures(self, record_name: str, commit: bool = True) -> RecordStats:
         """
         Resets the failure counter to zero for the given record.
 
         Args:
             record_name: The fully-qualified DNS name whose failures to clear.
+            commit: Whether to commit immediately (False = batched cycle).
 
         Returns:
             The updated RecordStats instance.
         """
-        stats = self.get_or_create(record_name)
+        stats = self.get_or_create(record_name, commit=commit)
         stats.failures = 0
-        return self.save(stats)
+        return self.save(stats, commit=commit)
 
-    def reset_updates(self, record_name: str) -> RecordStats:
+    def reset_updates(self, record_name: str, commit: bool = True) -> RecordStats:
         """
         Resets the updates counter to zero for the given record.
 
         Args:
             record_name: The fully-qualified DNS name whose updates counter to clear.
+            commit: Whether to commit immediately (False = batched cycle).
 
         Returns:
             The updated RecordStats instance.
         """
-        stats = self.get_or_create(record_name)
+        stats = self.get_or_create(record_name, commit=commit)
         stats.updates = 0
-        return self.save(stats)
+        return self.save(stats, commit=commit)
 
     def delete_by_name(self, record_name: str) -> bool:
         """

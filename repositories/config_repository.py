@@ -28,7 +28,6 @@ _DEFAULTS: dict[str, Any] = {
     "records": [],
     "refresh": 30,
     "interval": 300,
-    "ui_state": {"settings": True, "all_records": True, "logs": True},
 }
 
 
@@ -37,8 +36,8 @@ class ConfigRepository:
     Manages persistence of the single AppConfig row in the database.
 
     Reads and writes the AppConfig table. JSON-serialised fields (zones,
-    records, ui_state) are encoded/decoded here so callers always receive
-    plain Python types.
+    records) are encoded/decoded here so callers always receive plain
+    Python types.
 
     Collaborators:
         - Session: SQLModel DB session injected at construction time
@@ -75,7 +74,6 @@ class ConfigRepository:
                 records_json=json.dumps(_DEFAULTS["records"]),
                 refresh=_DEFAULTS["refresh"],
                 interval=_DEFAULTS["interval"],
-                ui_state_json=json.dumps(_DEFAULTS["ui_state"]),
             )
             self._session.add(config)
             self._session.commit()
@@ -160,32 +158,3 @@ class ConfigRepository:
             None
         """
         config.records_json = json.dumps(records)
-
-    def get_ui_state(self, config: AppConfig) -> dict[str, bool]:
-        """
-        Decodes the ui_state_json field into a Python dict.
-
-        Args:
-            config: The AppConfig instance to read from.
-
-        Returns:
-            A dict of section-name to boolean visibility flags.
-        """
-        try:
-            return json.loads(config.ui_state_json)
-        except (json.JSONDecodeError, TypeError):
-            logger.warning("ui_state_json is corrupt; returning defaults.")
-            return dict(_DEFAULTS["ui_state"])
-
-    def set_ui_state(self, config: AppConfig, ui_state: dict[str, bool]) -> None:
-        """
-        Encodes and stores the ui_state dict into the ui_state_json field.
-
-        Args:
-            config: The AppConfig instance to modify (in place).
-            ui_state: A dict of section-name to boolean visibility flags.
-
-        Returns:
-            None
-        """
-        config.ui_state_json = json.dumps(ui_state)

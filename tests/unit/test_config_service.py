@@ -85,3 +85,15 @@ async def test_update_credentials_persists(db_session):
     zones = await service.get_zones()
     assert token == "tok123"
     assert zones["example.com"] == "zone-abc"
+
+
+@pytest.mark.asyncio
+async def test_replace_managed_records_replaces_entire_list(db_session):
+    """replace_managed_records must replace the whole managed list (import path)."""
+    service = _make_service(db_session)
+    await service.add_managed_record("home.example.com")
+
+    await service.replace_managed_records(["vpn.example.com", "nas.example.com"])
+
+    records = await service.get_managed_records()
+    assert records == ["vpn.example.com", "nas.example.com"]

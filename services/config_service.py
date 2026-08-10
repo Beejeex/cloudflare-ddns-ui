@@ -9,11 +9,19 @@ Does NOT: make HTTP calls, manage DNS records, or interact with the scheduler.
 from __future__ import annotations
 
 import logging
+import threading
 
 from db.models import AppConfig
 from repositories.config_repository import ConfigRepository
 
 logger = logging.getLogger(__name__)
+
+# Module-level lock serialising read-modify-write on the managed-records list.
+# The list lives in a single JSON cell of the AppConfig row — without a lock,
+# concurrent read-modify-write sequences (e.g. two open tabs) can lose updates.
+# NOTE: The critical section contains no awaits, so holding a threading.Lock is
+# safe here and keeps the read+write atomic even across multiple request threads.
+_records_lock = threading.Lock()
 
 
 class ConfigService:
@@ -142,15 +150,6 @@ class ConfigService:
             config.unifi_enabled,
         )
 
-    async def get_ui_state(self) -> dict[str, bool]:
-        """
-        Returns the UI section visibility state.
-
-        Returns:
-            A dict of section-name to boolean visibility flags.
-        """
-        return self._repo.get_ui_state(self._load())
-
     # ---------------------------------------------------------------------------
     # Write operations
     # ---------------------------------------------------------------------------
@@ -161,6 +160,7 @@ class ConfigService:
         zones: dict[str, str],
         refresh: int,
         interval: int,
+        log_retention_days: int = 7,
         k8s_enabled: bool = False,
         unifi_host: str = "",
         unifi_api_key: str = "",
@@ -177,6 +177,7 @@ class ConfigService:
             zones: A dict mapping base domain strings to Cloudflare zone IDs.
             refresh: UI auto-refresh interval in seconds.
             interval: Background DDNS check interval in seconds.
+            log_retention_days: How many days of LogEntry rows to keep.
             k8s_enabled: Whether Kubernetes Ingress discovery is enabled.
             unifi_host: Hostname or IP of the local UniFi Network Application.
             unifi_api_key: UniFi API key with DNS write access.
@@ -192,6 +193,7 @@ class ConfigService:
         self._repo.set_zones(config, zones)
         config.refresh = refresh
         config.interval = interval
+        config.log_retention_days = log_retention_days
         config.k8s_enabled = k8s_enabled
         config.unifi_host = unifi_host
         config.unifi_api_key = unifi_api_key
@@ -214,18 +216,19 @@ class ConfigService:
         Returns:
             True if the record was added, False if it was already in the list.
         """
-        config = self._repo.load()
-        records = self._repo.get_records(config)
+        with _records_lock:
+            config = self._repo.load()
+            records = self._repo.get_records(config)
 
-        if record_name in records:
-            return False
+            if record_name in records:
+                return False
 
-        records.append(record_name)
-        self._repo.set_records(config, records)
-        self._repo.save(config)
-        self._config = None
-        logger.info("Added managed record: %s", record_name)
-        return True
+            records.append(record_name)
+            self._repo.set_records(config, records)
+            self._repo.save(config)
+            self._config = None
+            logger.info("Added managed record: %s", record_name)
+            return True
 
     async def remove_managed_record(self, record_name: str) -> bool:
         """
@@ -237,30 +240,33 @@ class ConfigService:
         Returns:
             True if the record was removed, False if it was not in the list.
         """
-        config = self._repo.load()
-        records = self._repo.get_records(config)
+        with _records_lock:
+            config = self._repo.load()
+            records = self._repo.get_records(config)
 
-        if record_name not in records:
-            return False
+            if record_name not in records:
+                return False
 
-        records.remove(record_name)
-        self._repo.set_records(config, records)
-        self._repo.save(config)
-        self._config = None
-        logger.info("Removed managed record: %s", record_name)
-        return True
+            records.remove(record_name)
+            self._repo.set_records(config, records)
+            self._repo.save(config)
+            self._config = None
+            logger.info("Removed managed record: %s", record_name)
+            return True
 
-    async def set_ui_state(self, ui_state: dict[str, bool]) -> None:
+    async def replace_managed_records(self, records: list[str]) -> None:
         """
-        Persists the UI section visibility state.
+        Replaces the entire managed-records list (used by config import).
 
         Args:
-            ui_state: A dict mapping section names to visibility booleans.
+            records: The new list of managed FQDNs.
 
         Returns:
             None
         """
-        config = self._repo.load()
-        self._repo.set_ui_state(config, ui_state)
-        self._repo.save(config)
-        self._config = None
+        with _records_lock:
+            config = self._repo.load()
+            self._repo.set_records(config, records)
+            self._repo.save(config)
+            self._config = None
+            logger.info("Replaced managed records: %d record(s).", len(records))

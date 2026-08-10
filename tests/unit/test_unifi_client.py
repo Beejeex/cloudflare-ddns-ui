@@ -110,6 +110,37 @@ async def test_list_records_returns_empty_for_empty_site(mock_http):
 
 
 @pytest.mark.asyncio
+async def test_list_records_paginates_across_pages(mock_http):
+    """list_records must follow totalCount and fetch every page of policies."""
+    def _policies(prefix: str, start: int, count: int) -> list[dict]:
+        return [
+            {
+                "type": "A_RECORD",
+                "id": f"{prefix}-{i}",
+                "enabled": True,
+                "domain": f"host{i}.example.com",
+                "ipv4Address": f"192.168.1.{i % 250 + 1}",
+                "ttlSeconds": 14400,
+            }
+            for i in range(start, start + count)
+        ]
+
+    # Two full 200-record pages — the realistic multi-page scenario.
+    page1 = {"offset": 0, "limit": 200, "count": 200, "totalCount": 400, "data": _policies("a", 0, 200)}
+    page2 = {"offset": 200, "limit": 200, "count": 200, "totalCount": 400, "data": _policies("b", 200, 200)}
+    route = mock_http.get(f"{_BASE}/sites/{_SITE_ID}/dns/policies").mock(
+        side_effect=[httpx.Response(200, json=page1), httpx.Response(200, json=page2)]
+    )
+    async with httpx.AsyncClient() as http_client:
+        client = UnifiClient(http_client=http_client, api_key="key", host=_HOST)
+        records = await client.list_records(_SITE_ID)
+
+    assert len(records) == 400
+    offsets = [c.request.url.params.get("offset") for c in route.calls]
+    assert offsets == ["0", "200"]
+
+
+@pytest.mark.asyncio
 async def test_list_records_raises_on_http_error(mock_http):
     """A 403 from the UniFi API must raise UnifiProviderError."""
     mock_http.get(f"{_BASE}/sites/{_SITE_ID}/dns/policies").mock(
@@ -119,6 +150,65 @@ async def test_list_records_raises_on_http_error(mock_http):
         client = UnifiClient(http_client=http_client, api_key="key", host=_HOST)
         with pytest.raises(UnifiProviderError, match="403"):
             await client.list_records(_SITE_ID)
+
+
+@pytest.mark.asyncio
+async def test_list_records_retries_on_transient_5xx(mock_http):
+    """A transient 5xx from list_records must be retried before succeeding."""
+    route = mock_http.get(f"{_BASE}/sites/{_SITE_ID}/dns/policies").mock(
+        side_effect=[
+            httpx.Response(500, text="Internal Server Error"),
+            httpx.Response(200, json=_list_response(_POLICY_A)),
+        ]
+    )
+    async with httpx.AsyncClient() as http_client:
+        client = UnifiClient(http_client=http_client, api_key="key", host=_HOST)
+        records = await client.list_records(_SITE_ID)
+
+    assert len(records) == 1
+    assert len(route.calls) == 2
+
+
+# ---------------------------------------------------------------------------
+# list_records — shared listing cache
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_records_served_from_cache(mock_http):
+    """A cached site listing must skip the network call on repeat reads."""
+    route = mock_http.get(f"{_BASE}/sites/{_SITE_ID}/dns/policies").mock(
+        return_value=httpx.Response(200, json=_list_response(_POLICY_A))
+    )
+    cache: dict = {}
+    async with httpx.AsyncClient() as http_client:
+        client = UnifiClient(http_client=http_client, api_key="key", host=_HOST, cache=cache)
+        first = await client.list_records(_SITE_ID)
+        second = await client.list_records(_SITE_ID)
+
+    assert len(first) == 1 and len(second) == 1
+    assert len(route.calls) == 1
+    assert f"list_records:{_SITE_ID}" in cache
+
+
+@pytest.mark.asyncio
+async def test_create_record_invalidates_site_listing(mock_http):
+    """A mutation must drop the cached site listing so the next read re-fetches."""
+    mock_http.post(f"{_BASE}/sites/{_SITE_ID}/dns/policies").mock(
+        return_value=httpx.Response(201, json={**_POLICY_A, "id": "new-id-0001"})
+    )
+    list_route = mock_http.get(f"{_BASE}/sites/{_SITE_ID}/dns/policies").mock(
+        return_value=httpx.Response(200, json=_list_response(_POLICY_A))
+    )
+    cache: dict = {}
+    async with httpx.AsyncClient() as http_client:
+        client = UnifiClient(http_client=http_client, api_key="key", host=_HOST, cache=cache)
+        await client.list_records(_SITE_ID)                # populates cache
+        await client.create_record(_SITE_ID, "x.example.com", "192.168.1.50")  # invalidates
+        await client.list_records(_SITE_ID)                # must re-fetch
+
+    assert len(list_route.calls) == 2
+    assert f"list_records:{_SITE_ID}" in cache
 
 
 # ---------------------------------------------------------------------------

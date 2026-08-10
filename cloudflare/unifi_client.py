@@ -10,6 +10,7 @@ Does NOT: read configuration from the database, manage stats, or schedule jobs.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -17,6 +18,7 @@ import httpx
 
 from cloudflare.dns_provider import DnsRecord, DNSProvider
 from exceptions import UnifiProviderError
+from utils import cache_invalidate_prefix, cache_read, cache_write
 
 logger = logging.getLogger(__name__)
 
@@ -24,11 +26,25 @@ logger = logging.getLogger(__name__)
 # Exported so tests can construct expected URLs without duplicating the string.
 _UNIFI_PATH = "/proxy/network/integration/v1"
 
+# Freshness window for the shared site/policy listing cache.  A short TTL
+# collapses the scheduler sync pass and the UI page load into a single
+# listing fetch per interval without risking stale data for long.
+_LIST_CACHE_TTL = 30.0
+
 # TTL of 0 = auto (inherits from the UniFi site's global DNS TTL setting)
 _DEFAULT_TTL = 0
 
 # Maximum records to fetch in a single list call (UniFi API max is 200)
 _LIST_LIMIT = 200
+
+# Defensive cap on the number of pagination iterations per list_records() call.
+_MAX_PAGES = 50
+
+# Retry policy for transient controller failures (network errors and 5xx).
+# The UniFi controller is a local appliance that can be briefly unavailable
+# during a reboot — a single blip must not fail the sync pass.
+_RETRY_ATTEMPTS = 3
+_RETRY_BACKOFF = 0.2  # seconds, multiplied by (attempt + 1)
 
 
 class UnifiClient:
@@ -50,15 +66,29 @@ class UnifiClient:
         - DNSProvider: this class satisfies the protocol contract
     """
 
-    def __init__(self, http_client: httpx.AsyncClient, api_key: str, host: str) -> None:
+    def __init__(
+        self,
+        http_client: httpx.AsyncClient,
+        api_key: str,
+        host: str,
+        cache: dict[str, tuple[float, Any]] | None = None,
+        cache_ttl: float = _LIST_CACHE_TTL,
+    ) -> None:
         """
         Initialises the client with an HTTP client, API key, and controller host.
+
+        An optional shared cache dict (from app.state.listing_cache) lets
+        concurrent callers share site/policy listing fetches within the TTL
+        window instead of each hitting the controller.  Mutations invalidate
+        the affected site's listing automatically.
 
         Args:
             http_client: A long-lived httpx.AsyncClient instance (must have verify=False).
             api_key: A UniFi API key with DNS write access.
             host: Hostname or IP of the local UniFi Network Application,
                   e.g. "192.168.1.1" or "unifi.local".
+            cache: Optional shared listing cache; None disables caching.
+            cache_ttl: Freshness window for cached listings in seconds.
         """
         self._client = http_client
         # Build the base URL once; strip trailing slash to avoid double-slash URLs.
@@ -68,6 +98,8 @@ class UnifiClient:
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
+        self._cache = cache
+        self._cache_ttl = cache_ttl
 
     # ---------------------------------------------------------------------------
     # Public helper
@@ -134,6 +166,7 @@ class UnifiClient:
         }
         logger.debug("PUT %s payload=%s", url, payload)
         data = await self._request("PUT", url, json=payload)
+        self._invalidate_site_listing(zone_id)
         return self._parse_policy(data)
 
     async def create_record(self, zone_id: str, record_name: str, ip: str) -> DnsRecord:
@@ -161,6 +194,7 @@ class UnifiClient:
         }
         logger.debug("POST %s payload=%s", url, payload)
         data = await self._request("POST", url, json=payload)
+        self._invalidate_site_listing(zone_id)
         return self._parse_policy(data)
 
     async def delete_record(self, zone_id: str, record_id: str) -> None:
@@ -180,6 +214,7 @@ class UnifiClient:
         url = f"{self._base}/sites/{zone_id}/dns/policies/{record_id}"
         logger.debug("DELETE %s", url)
         await self._request("DELETE", url)
+        self._invalidate_site_listing(zone_id)
 
     async def list_sites(self) -> list[dict[str, str]]:
         """
@@ -196,6 +231,12 @@ class UnifiClient:
         """
         url = f"{self._base}/sites"
         logger.debug("GET %s (list sites)", url)
+
+        cache_key = "list_sites"
+        cached = cache_read(self._cache, cache_key, self._cache_ttl)
+        if cached is not None:
+            return cached
+
         data = await self._request("GET", url)
         sites: list[dict[str, str]] = []
         for s in data.get("data", []):
@@ -204,14 +245,16 @@ class UnifiClient:
             # UniFi uses "internalReference" for the default site; fall back to "name".
             name = s.get("name") or s.get("internalReference") or site_id[:8]
             sites.append({"id": site_id, "name": name})
+        cache_write(self._cache, cache_key, sites)
         return sites
 
     async def list_records(self, zone_id: str) -> list[DnsRecord]:
         """
         Returns all A-record DNS policies on the given site.
 
-        Fetches up to 200 policies (UniFi API maximum per page). Filters to
-        A_RECORD type only.
+        Fetches policies in pages of 200 (the UniFi API maximum per request)
+        and follows the ``totalCount`` field until every policy has been read,
+        so sites with more than 200 policies are fully enumerated.
 
         Args:
             zone_id: The UniFi site UUID.
@@ -223,20 +266,61 @@ class UnifiClient:
             UnifiProviderError: If the API call fails.
         """
         url = f"{self._base}/sites/{zone_id}/dns/policies"
-        params = {"limit": _LIST_LIMIT, "offset": 0}
-        logger.debug("GET %s params=%s", url, params)
-        data = await self._request("GET", url, params=params)
+        cache_key = f"list_records:{zone_id}"
+        cached = cache_read(self._cache, cache_key, self._cache_ttl)
+        if cached is not None:
+            logger.debug("Site %s listing served from cache.", zone_id)
+            return cached
 
         records: list[DnsRecord] = []
-        for policy in data.get("data", []):
-            # NOTE: Only A_RECORD type is relevant — skip CNAME, MX, etc.
-            if policy.get("type") == "A_RECORD":
-                records.append(self._parse_policy(policy))
+        seen_ids: set[str] = set()
+        offset = 0
+
+        while True:
+            params = {"limit": _LIST_LIMIT, "offset": offset}
+            logger.debug("GET %s params=%s", url, params)
+            data = await self._request("GET", url, params=params)
+
+            page_count = len(data.get("data", []))
+            for policy in data.get("data", []):
+                # NOTE: Only A_RECORD type is relevant — skip CNAME, MX, etc.
+                if policy.get("type") != "A_RECORD":
+                    continue
+                record = self._parse_policy(policy)
+                # NOTE: Dedupe by id in case page boundaries overlap.
+                if record.id not in seen_ids:
+                    seen_ids.add(record.id)
+                    records.append(record)
+
+            total_count = data.get("totalCount") or 0
+            offset += _LIST_LIMIT
+            # Stop when a short page signals the end of data, or once we have
+            # walked past the reported total. Cap iterations defensively so a
+            # misbehaving controller can never cause an unbounded loop.
+            if page_count < _LIST_LIMIT or offset >= total_count or offset > _MAX_PAGES * _LIST_LIMIT:
+                break
+
+        cache_write(self._cache, cache_key, records)
         return records
 
     # ---------------------------------------------------------------------------
     # Internal helpers
     # ---------------------------------------------------------------------------
+
+    def _invalidate_site_listing(self, zone_id: str) -> None:
+        """
+        Drops the cached policy listing for a site after a mutation.
+
+        Ensures the next read re-fetches authoritative state instead of
+        serving a stale list that no longer reflects the write.
+
+        Args:
+            zone_id: The UniFi site UUID whose listing to invalidate.
+
+        Returns:
+            None
+        """
+        cache_invalidate_prefix(self._cache, f"list_records:{zone_id}")
 
     async def _request(
         self,
@@ -260,24 +344,36 @@ class UnifiClient:
         Raises:
             UnifiProviderError: On HTTP error, connection failure, or non-2xx response.
         """
-        try:
-            response = await self._client.request(
-                method,
-                url,
-                headers=self._headers,
-                params=params,
-                json=json,
-            )
-            response.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            raise UnifiProviderError(
-                f"UniFi API {exc.response.status_code} for {method} {url}: "
-                f"{exc.response.text[:200]}"
-            ) from exc
-        except httpx.RequestError as exc:
-            raise UnifiProviderError(
-                f"UniFi API connection error for {method} {url}: {exc}"
-            ) from exc
+        attempt = 0
+        while True:
+            try:
+                response = await self._client.request(
+                    method,
+                    url,
+                    headers=self._headers,
+                    params=params,
+                    json=json,
+                )
+                response.raise_for_status()
+                break
+            except httpx.HTTPStatusError as exc:
+                # 5xx = transient controller error → retry with backoff; 4xx = terminal.
+                if exc.response.status_code >= 500 and attempt < _RETRY_ATTEMPTS - 1:
+                    await asyncio.sleep(_RETRY_BACKOFF * (attempt + 1))
+                    attempt += 1
+                    continue
+                raise UnifiProviderError(
+                    f"UniFi API {exc.response.status_code} for {method} {url}: "
+                    f"{exc.response.text[:200]}"
+                ) from exc
+            except httpx.RequestError as exc:
+                if attempt < _RETRY_ATTEMPTS - 1:
+                    await asyncio.sleep(_RETRY_BACKOFF * (attempt + 1))
+                    attempt += 1
+                    continue
+                raise UnifiProviderError(
+                    f"UniFi API connection error for {method} {url}: {exc}"
+                ) from exc
 
         # DELETE returns 204 with no body
         if response.status_code == 204 or not response.content:

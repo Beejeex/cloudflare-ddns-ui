@@ -9,28 +9,30 @@ Does NOT: contain DNS business logic, config reading, or HTTP calls directly
 
 from __future__ import annotations
 
-import json
 import logging
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import httpx
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlmodel import Session
 
 from cloudflare.cloudflare_client import CloudflareClient
-from cloudflare.dns_provider import DnsRecord
 from cloudflare.unifi_client import UnifiClient
 from db.database import engine
-from exceptions import UnifiProviderError
+from exceptions import IpFetchError
 from log_cleanup import run_cleanup
+from presenters import build_record_row
 from repositories.config_repository import ConfigRepository
+from repositories.history_repository import HistoryRepository
 from repositories.record_config_repository import RecordConfigRepository
 from repositories.stats_repository import StatsRepository
 from services.dns_service import DnsService
+from services.history_service import HistoryService
 from services.ip_service import IpService
 from services.log_service import LogService
 from services.stats_service import StatsService
+from services.unifi_service import UniFiService
 
 if TYPE_CHECKING:
     from services.broadcast_service import BroadcastService
@@ -39,30 +41,6 @@ logger = logging.getLogger(__name__)
 
 # Job ID used to identify the DDNS check job in APScheduler
 _JOB_ID = "ddns_check"
-
-
-def _to_local_policy_name(record_name: str) -> str:
-    """
-    Converts a managed FQDN into its UniFi local policy name.
-
-    Replaces only the TLD (last label) with "local", preserving all
-    intermediate labels so the full subdomain structure is retained.
-
-    Args:
-        record_name: Managed DNS name, e.g. "home.example.net".
-
-    Returns:
-        Local DNS name, e.g. "home.example.local".
-    """
-    name = record_name.strip()
-    if name.endswith(".local"):
-        return name
-    # rsplit on the last dot so we keep all intermediate labels intact.
-    parts = name.rsplit(".", 1)
-    if len(parts) == 1:
-        # No dot present — nothing to replace.
-        return name
-    return f"{parts[0]}.local"
 
 
 # ---------------------------------------------------------------------------
@@ -74,6 +52,7 @@ async def _ddns_check_job(
     http_client: httpx.AsyncClient,
     unifi_http_client: httpx.AsyncClient,
     broadcaster: BroadcastService | None = None,
+    app_state: Any = None,
 ) -> None:
     """
     APScheduler job: runs one DDNS check cycle and optional log cleanup.
@@ -96,6 +75,9 @@ async def _ddns_check_job(
         http_client: The long-lived shared httpx.AsyncClient from app.state.
         unifi_http_client: The UniFi-specific client (verify=False) from app.state.
         broadcaster: Optional BroadcastService to push SSE events after the cycle.
+        app_state: Optional FastAPI app.state object. When provided, IpService
+            uses its shared ip_cache so the cycle and the SSE broadcast do not
+            issue redundant upstream IP lookups.
 
     Returns:
         None
@@ -121,10 +103,18 @@ async def _ddns_check_job(
         cloudflare_client = CloudflareClient(
             http_client=http_client,
             api_token=config.api_token,
+            cache=getattr(app_state, "listing_cache", None) if app_state else None,
         )
-        ip_service = IpService(http_client=http_client)
+        ip_service = IpService(http_client=http_client, app_state=app_state)
         stats_service = StatsService(stats_repo)
-        dns_service = DnsService(cloudflare_client, ip_service, stats_service, log_service)
+        history_service = HistoryService(HistoryRepository(session))
+        dns_service = DnsService(
+            cloudflare_client,
+            ip_service,
+            stats_service,
+            log_service,
+            history_service=history_service,
+        )
 
         await dns_service.run_check_cycle(records, zones, record_configs=record_configs)
 
@@ -134,198 +124,26 @@ async def _ddns_check_job(
         # For every managed record:
         #   unifi_enabled=True  → create or update the UniFi DNS policy
         #   unifi_enabled=False → delete the policy if one exists
+        # All policy reconciliation lives in UniFiService — the job only
+        # wires up the client and delegates.
         if config.unifi_enabled and config.unifi_host and config.unifi_api_key and config.unifi_site_id:
             unifi_client = UnifiClient(
                 http_client=unifi_http_client,
                 api_key=config.unifi_api_key,
                 host=config.unifi_host,
+                cache=getattr(app_state, "listing_cache", None) if app_state else None,
             )
-            unifi_enabled_records = [r for r in records if (rc := record_configs.get(r)) and rc.unifi_enabled]
-            log_service.log(
-                f"UniFi pass: syncing {len(unifi_enabled_records)} of {len(records)} record(s) to {config.unifi_host}.",
-                level="INFO",
-            )
-            # NOTE: Fetch ALL existing policies in ONE call here, then do dict
-            # lookups per record. Without this, each get_record() triggers a
-            # separate GET /dns/policies, causing a burst that returns 502s.
-            try:
-                _all_policies = await unifi_client.list_records(config.unifi_site_id)
-                existing_policies: dict[str, DnsRecord] = {p.name: p for p in _all_policies}
-            except UnifiProviderError as exc:
-                log_service.log(
-                    f"UniFi pass: could not list policies — {exc}",
-                    level="ERROR",
-                )
-                logger.error("UniFi list_records failed, aborting pass: %s", exc)
-                return
-            unifi_created = unifi_updated = unifi_unchanged = unifi_deleted = unifi_failed = 0
-
-            for record_name in records:
-                cfg = record_configs.get(record_name)
-
-                # ----------------------------------------------------------------
-                # Main domain policy — controlled solely by cfg.unifi_enabled.
-                # NOTE: This is fully independent of the .local policy below;
-                # either can be managed without the other.
-                # ----------------------------------------------------------------
-                if cfg is None or not cfg.unifi_enabled:
-                    try:
-                        existing = existing_policies.get(record_name)
-                        if existing is not None:
-                            await unifi_client.delete_record(config.unifi_site_id, existing.id)
-                            log_service.log(
-                                f"UniFi: removed policy '{record_name}' (disabled by user).",
-                                level="INFO",
-                            )
-                            unifi_deleted += 1
-                    except UnifiProviderError as exc:
-                        log_service.log(
-                            f"UniFi: failed to remove policy '{record_name}' — {exc}",
-                            level="ERROR",
-                        )
-                        logger.error("UniFi policy removal failed for %s: %s", record_name, exc)
-                        unifi_failed += 1
-                else:
-                    # Determine target IP: per-record static → global default
-                    target_ip = (
-                        cfg.unifi_static_ip.strip()
-                        or config.unifi_default_ip.strip()
-                    )
-                    if not target_ip:
-                        log_service.log(
-                            f"UniFi: skipped '{record_name}' — no IP configured.",
-                            level="WARNING",
-                        )
-                        unifi_failed += 1
-                    else:
-                        try:
-                            existing = existing_policies.get(record_name)
-                            if existing is None:
-                                await unifi_client.create_record(config.unifi_site_id, record_name, target_ip)
-                                log_service.log(
-                                    f"UniFi: created policy '{record_name}' → {target_ip} ✓",
-                                    level="INFO",
-                                )
-                                unifi_created += 1
-                            elif existing.content != target_ip:
-                                await unifi_client.update_record(config.unifi_site_id, existing, target_ip)
-                                log_service.log(
-                                    f"UniFi: updated policy '{record_name}' → {target_ip} ✓",
-                                    level="INFO",
-                                )
-                                unifi_updated += 1
-                            else:
-                                logger.debug("UniFi policy '%s' already up to date (%s).", record_name, target_ip)
-                                log_service.log(
-                                    f"UniFi: '{record_name}' already in sync ({target_ip}).",
-                                    level="INFO",
-                                )
-                                unifi_unchanged += 1
-                            # NOTE: Stamp last_checked so CF-disabled records always show
-                            # a timestamp on the dashboard, not just CF-enabled ones.
-                            stats_repo.record_check(record_name)
-                        except UnifiProviderError as exc:
-                            log_service.log(
-                                f"UniFi: failed to sync '{record_name}' — {exc}",
-                                level="ERROR",
-                            )
-                            logger.error("UniFi sync failed for %s: %s", record_name, exc)
-                            unifi_failed += 1
-
-                # ----------------------------------------------------------------
-                # .local policy — controlled solely by cfg.unifi_local_enabled.
-                # NOTE: Independent of unifi_enabled — a .local-only setup
-                # (unifi_enabled=False + unifi_local_enabled=True) is valid.
-                # If the managed record itself is already *.local there is no
-                # separate secondary name to manage.
-                # ----------------------------------------------------------------
-                local_record_name = _to_local_policy_name(record_name)
-                if local_record_name == record_name:
-                    continue
-
-                if cfg is None or not cfg.unifi_local_enabled:
-                    try:
-                        existing_local = existing_policies.get(local_record_name)
-                        if existing_local is not None:
-                            await unifi_client.delete_record(config.unifi_site_id, existing_local.id)
-                            log_service.log(
-                                f"UniFi: removed local policy '{local_record_name}' (disabled by user).",
-                                level="INFO",
-                            )
-                            unifi_deleted += 1
-                    except UnifiProviderError as exc:
-                        log_service.log(
-                            f"UniFi: failed to remove local policy '{local_record_name}' — {exc}",
-                            level="ERROR",
-                        )
-                        logger.error("UniFi local policy removal failed for %s: %s", local_record_name, exc)
-                        unifi_failed += 1
-                else:
-                    local_target_ip = (
-                        cfg.unifi_local_static_ip.strip()
-                        or cfg.unifi_static_ip.strip()
-                        or config.unifi_default_ip.strip()
-                    )
-                    if not local_target_ip:
-                        log_service.log(
-                            f"UniFi: skipped local policy '{local_record_name}' — no IP configured.",
-                            level="WARNING",
-                        )
-                        unifi_failed += 1
-                    else:
-                        try:
-                            existing_local = existing_policies.get(local_record_name)
-                            if existing_local is None:
-                                await unifi_client.create_record(config.unifi_site_id, local_record_name, local_target_ip)
-                                log_service.log(
-                                    f"UniFi: created local policy '{local_record_name}' → {local_target_ip} ✓",
-                                    level="INFO",
-                                )
-                                unifi_created += 1
-                            elif existing_local.content != local_target_ip:
-                                await unifi_client.update_record(config.unifi_site_id, existing_local, local_target_ip)
-                                log_service.log(
-                                    f"UniFi: updated local policy '{local_record_name}' → {local_target_ip} ✓",
-                                    level="INFO",
-                                )
-                                unifi_updated += 1
-                            else:
-                                log_service.log(
-                                    f"UniFi: local '{local_record_name}' already in sync ({local_target_ip}).",
-                                    level="INFO",
-                                )
-                                unifi_unchanged += 1
-                            # NOTE: Stamp last_checked for .local-only records so
-                            # the dashboard shows a timestamp even when the parent
-                            # policy is disabled.
-                            stats_repo.record_check(record_name)
-                        except UnifiProviderError as exc:
-                            log_service.log(
-                                f"UniFi: failed to sync local '{local_record_name}' — {exc}",
-                                level="ERROR",
-                            )
-                            logger.error("UniFi local sync failed for %s: %s", local_record_name, exc)
-                            unifi_failed += 1
-
-            # Summary log for the UniFi pass
-            summary_parts: list[str] = []
-            if unifi_unchanged:
-                summary_parts.append(f"{unifi_unchanged} in sync")
-            if unifi_created:
-                summary_parts.append(f"{unifi_created} created")
-            if unifi_updated:
-                summary_parts.append(f"{unifi_updated} updated")
-            if unifi_deleted:
-                summary_parts.append(f"{unifi_deleted} removed")
-            if unifi_failed:
-                summary_parts.append(f"{unifi_failed} failed")
-            log_service.log(
-                "UniFi pass complete: " + (", ".join(summary_parts) if summary_parts else "nothing to do") + ".",
-                level="INFO" if not unifi_failed else "WARNING",
+            unifi_service = UniFiService(unifi_client, log_service, stats_repo)
+            await unifi_service.sync_policies(
+                records=records,
+                record_configs=record_configs,
+                site_id=config.unifi_site_id,
+                default_ip=config.unifi_default_ip,
+                host=config.unifi_host,
             )
 
         # Run daily log cleanup at the end of each cycle if due
-        run_cleanup(session, days_to_keep=7)
+        run_cleanup(session, days_to_keep=config.log_retention_days)
 
     # -------------------------------------------------------------------------
     # SSE broadcasts — fire after the DB session is closed (data is committed)
@@ -335,16 +153,14 @@ async def _ddns_check_job(
         from shared_templates import templates  # noqa: PLC0415
 
         # Publish ip_updated with the last successfully fetched IP.
-        # NOTE: ip_service is out of scope here; re-fetch from ipify (cached on
-        # app.state when the scheduler was called with app_state, but the
-        # scheduler job doesn't carry app_state — so this is a lightweight call
-        # that will hit the cache if the job used the same client recently).
+        # NOTE: Passing app_state lets IpService reuse the shared ip_cache, so
+        # the cycle's IP lookup is not duplicated by the broadcast.
         try:
-            _ip_svc = IpService(http_client=http_client)
+            _ip_svc = IpService(http_client=http_client, app_state=app_state)
             _current_ip = await _ip_svc.get_public_ip()
             # NOTE: Plain text — HTMX sse-swap uses it as innerHTML directly
             broadcaster.publish("ip_updated", _current_ip)
-        except Exception as exc:
+        except IpFetchError as exc:
             logger.debug("Broadcaster: could not publish ip_updated: %s", exc)
 
         # Publish records_updated with a stats-based render (no extra CF calls).
@@ -365,32 +181,7 @@ async def _ddns_check_job(
                     _bcast_config.unifi_enabled,
                 )
             rows = [
-                {
-                    "name": r,
-                    "cf_record_id": None,
-                    "dns_ip": "\u2014",
-                    "is_up_to_date": None,
-                    "updates": (_bcast_stats.get(r).updates if _bcast_stats.get(r) else 0),
-                    "failures": (_bcast_stats.get(r).failures if _bcast_stats.get(r) else 0),
-                    "last_checked": (
-                        _bcast_stats.get(r).last_checked.isoformat()
-                        if _bcast_stats.get(r) and _bcast_stats.get(r).last_checked else None
-                    ),
-                    "last_updated": (
-                        _bcast_stats.get(r).last_updated.isoformat()
-                        if _bcast_stats.get(r) and _bcast_stats.get(r).last_updated else None
-                    ),
-                    "unifi_ip": None,
-                    "unifi_local_ip": None,
-                    "unifi_record_id": None,
-                    "cfg_cf_enabled": _bcast_cfgs.get(r).cf_enabled if _bcast_cfgs.get(r) else False,
-                    "cfg_ip_mode": _bcast_cfgs.get(r).ip_mode if _bcast_cfgs.get(r) else "dynamic",
-                    "cfg_static_ip": _bcast_cfgs.get(r).static_ip if _bcast_cfgs.get(r) else "",
-                    "cfg_unifi_enabled": _bcast_cfgs.get(r).unifi_enabled if _bcast_cfgs.get(r) else False,
-                    "cfg_unifi_static_ip": _bcast_cfgs.get(r).unifi_static_ip if _bcast_cfgs.get(r) else "",
-                    "cfg_unifi_local_enabled": _bcast_cfgs.get(r).unifi_local_enabled if _bcast_cfgs.get(r) else False,
-                    "cfg_unifi_local_static_ip": _bcast_cfgs.get(r).unifi_local_static_ip if _bcast_cfgs.get(r) else "",
-                }
+                build_record_row(r, stats=_bcast_stats.get(r), cfg=_bcast_cfgs.get(r))
                 for r in _bcast_records
             ]
             _html = templates.get_template("partials/records_table.html").render(
@@ -414,6 +205,7 @@ def create_scheduler(
     unifi_http_client: httpx.AsyncClient,
     interval_seconds: int = 300,
     broadcaster: BroadcastService | None = None,
+    app_state: Any = None,
 ) -> AsyncIOScheduler:
     """
     Creates and returns a configured AsyncIOScheduler with the DDNS check job.
@@ -426,6 +218,7 @@ def create_scheduler(
         unifi_http_client: The UniFi-specific client (verify=False) to pass into the job.
         interval_seconds: Seconds between DDNS check cycles (default 300).
         broadcaster: Optional BroadcastService for SSE push after each cycle.
+        app_state: Optional FastAPI app.state to enable IP caching in the job.
 
     Returns:
         A configured but not yet started AsyncIOScheduler.
@@ -440,6 +233,7 @@ def create_scheduler(
             "http_client": http_client,
             "unifi_http_client": unifi_http_client,
             "broadcaster": broadcaster,
+            "app_state": app_state,
         },
         # NOTE: next_run_time=now triggers the first check immediately on startup
         # rather than waiting a full interval before the first run.
@@ -476,6 +270,7 @@ async def run_ddns_check_now(
     http_client: httpx.AsyncClient,
     unifi_http_client: httpx.AsyncClient,
     broadcaster: BroadcastService | None = None,
+    app_state: Any = None,
 ) -> None:
     """
     Runs one DDNS check cycle immediately, outside the normal schedule.
@@ -487,6 +282,7 @@ async def run_ddns_check_now(
         http_client: The shared httpx.AsyncClient from app.state.
         unifi_http_client: The UniFi-specific client from app.state.
         broadcaster: Optional BroadcastService for SSE push after the cycle.
+        app_state: Optional FastAPI app.state to enable IP caching in the job.
 
     Returns:
         None
@@ -496,4 +292,5 @@ async def run_ddns_check_now(
         http_client=http_client,
         unifi_http_client=unifi_http_client,
         broadcaster=broadcaster,
+        app_state=app_state,
     )

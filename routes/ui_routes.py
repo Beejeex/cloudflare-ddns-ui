@@ -7,13 +7,17 @@ Does NOT: mutate state, return HTMX fragments, or call DNS/IP services directly.
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import HTMLResponse
+from shared_templates import templates
 from dependencies import (
     get_config_service,
     get_dns_service,
+    get_ip_service,
     get_kubernetes_service,
     get_log_service,
     get_record_config_repo,
@@ -22,41 +26,19 @@ from dependencies import (
 )
 from exceptions import DnsProviderError, IpFetchError, KubernetesError, UnifiProviderError
 from cloudflare.unifi_client import UnifiClient
+from presenters import build_record_row
 from repositories.record_config_repository import RecordConfigRepository
 from repositories.stats_repository import StatsRepository
 from services.config_service import ConfigService
 from services.dns_service import DnsService
+from services.ip_service import IpService
 from services.kubernetes_service import KubernetesService
 from services.log_service import LogService
+from utils import mask_secret, to_local_policy_name
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-from shared_templates import templates  # noqa: E402
-
-
-def _to_local_policy_name(record_name: str) -> str:  # noqa: keep in sync with scheduler.py
-    """
-    Converts a managed FQDN into its UniFi local policy name.
-
-    Replaces only the TLD (last label) with "local", preserving all
-    intermediate labels so the full subdomain structure is retained.
-
-    Args:
-        record_name: Managed FQDN, e.g. "home.example.net".
-
-    Returns:
-        Local DNS name, e.g. "home.example.local".
-    """
-    name = record_name.strip()
-    if name.endswith(".local"):
-        return name
-    # rsplit on the last dot so we keep all intermediate labels intact.
-    parts = name.rsplit(".", 1)
-    if len(parts) == 1:
-        # No dot present — nothing to replace.
-        return name
-    return f"{parts[0]}.local"
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -68,6 +50,7 @@ async def dashboard(
     kubernetes_service: KubernetesService = Depends(get_kubernetes_service),
     unifi_client: UnifiClient = Depends(get_unifi_client),
     record_config_repo: RecordConfigRepository = Depends(get_record_config_repo),
+    ip_service: IpService = Depends(get_ip_service),
 ) -> HTMLResponse:
     """
     Renders the main DDNS dashboard page.
@@ -91,119 +74,113 @@ async def dashboard(
     zones = await config_service.get_zones()
     managed_records = await config_service.get_managed_records()
     local_parent_by_name = {
-        _to_local_policy_name(name): name
+        to_local_policy_name(name): name
         for name in managed_records
-        if _to_local_policy_name(name) != name
+        if to_local_policy_name(name) != name
     }
 
     # Load all per-record settings up front in one query
     record_configs = record_config_repo.get_all(managed_records)
-
-    # Fetch current public IP — display "Unavailable" on failure rather than 500
-    current_ip = "Unavailable"
-    try:
-        from services.ip_service import IpService
-        ip_service = IpService(request.app.state.http_client)
-        current_ip = await ip_service.get_public_ip()
-    except IpFetchError as exc:
-        logger.warning("Could not fetch public IP for dashboard: %s", exc)
 
     # Detect not-yet-configured state before hitting the API
     api_error: str | None = None
     if not config.api_token or not zones:
         api_error = "No API token or zones configured. Go to Settings to set them up."
 
-    # Build per-record display data (Cloudflare + UniFi side by side)
-    record_data = []
-
-    # Fetch all UniFi DNS policies in one call upfront (avoid N per-record requests)
-    unifi_error: str | None = None
-    unifi_policy_map: dict[str, object] = {}
     _, _, unifi_site_id, unifi_default_ip, unifi_enabled = await config_service.get_unifi_config()
-    if unifi_enabled and unifi_client.is_configured() and unifi_site_id:
+
+    # ---------------------------------------------------------------------
+    # Fire off all independent network lookups concurrently (asyncio.gather)
+    # instead of awaiting them one-by-one — page load scales with the
+    # slowest provider, not the sum of all of them.
+    # ---------------------------------------------------------------------
+
+    async def _fetch_current_ip() -> str:
+        """Returns the public IP, or "Unavailable" on failure (never raises)."""
+        try:
+            return await ip_service.get_public_ip()
+        except IpFetchError as exc:
+            logger.warning("Could not fetch public IP for dashboard: %s", exc)
+            return "Unavailable"
+
+    async def _fetch_unifi_policies() -> tuple[dict[str, object], str | None]:
+        """Fetches all UniFi DNS policies (name → DnsRecord), or an error string."""
+        if not (unifi_enabled and unifi_client.is_configured() and unifi_site_id):
+            return {}, None
         try:
             policies = await unifi_client.list_records(unifi_site_id)
-            unifi_policy_map = {p.name: p for p in policies}
+            return {p.name: p for p in policies}, None
         except UnifiProviderError as exc:
             logger.warning("UniFi DNS policy fetch failed: %s", exc)
-            unifi_error = str(exc)
+            return {}, str(exc)
 
-    # Discover hostnames from Kubernetes Ingress resources before the managed loop
-    # so per-record entries can include k8s_namespace / k8s_ingress_name.
-    k8s_records: list = []
-    k8s_error: str | None = None
-    if kubernetes_service.is_enabled():
+    async def _fetch_k8s_records() -> tuple[list, str | None]:
+        """Discovers Ingress hostnames for the grid, or an error string."""
+        if not kubernetes_service.is_enabled():
+            return [], None
         try:
-            k8s_records = await kubernetes_service.list_ingress_records()
+            return await kubernetes_service.list_ingress_records(), None
         except KubernetesError as exc:
             logger.warning("Kubernetes ingress discovery failed: %s", exc)
-            k8s_error = str(exc)
-    k8s_by_hostname = {r.hostname: r for r in k8s_records}
+            return [], str(exc)
 
-    # Bulk-fetch all DNS records (one call per zone) and stats (one DB query)
-    # instead of N individual lookups — significant speedup with many managed records.
-    zone_record_map: dict = {}
-    if not api_error:
+    async def _fetch_zone_record_map() -> tuple[dict, str | None]:
+        """Bulk-fetches per-zone DNS records, or an error string."""
+        if api_error:
+            return {}, None
         try:
-            zone_record_map = await dns_service.fetch_zone_record_map(managed_records, zones)
+            return await dns_service.fetch_zone_record_map(managed_records, zones), None
         except DnsProviderError as exc:
             logger.warning("Could not bulk-fetch zone records for dashboard: %s", exc)
-            api_error = str(exc)
+            return {}, str(exc)
+
+    async def _fetch_zone_records() -> tuple[list, str | None]:
+        """Fetches all A-records across zones for the discovery panel, or an error string."""
+        if api_error:
+            return [], None
+        try:
+            return await dns_service.list_zone_records(zones), None
+        except DnsProviderError as exc:
+            logger.warning("Could not fetch zone records: %s", exc)
+            return [], str(exc)
+
+    (current_ip, (unifi_policy_map, unifi_error), (k8s_records, k8s_error),
+     (zone_record_map, zone_map_error), (zone_records, zone_records_error)) = await asyncio.gather(
+        _fetch_current_ip(),
+        _fetch_unifi_policies(),
+        _fetch_k8s_records(),
+        _fetch_zone_record_map(),
+        _fetch_zone_records(),
+    )
+
+    # Surface a bulk CF fetch failure as the page-level API banner
+    if api_error is None and zone_map_error:
+        api_error = zone_map_error
+
+    k8s_by_hostname = {r.hostname: r for r in k8s_records}
+
+    # Build per-record display data (Cloudflare + UniFi side by side)
+    record_data = []
 
     stats_bulk = stats_repo.get_bulk(managed_records)
 
     for record_name in managed_records:
-        dns_record = zone_record_map.get(record_name)
-        stats = stats_bulk.get(record_name)
-        dns_ip = dns_record.content if dns_record else "Not Found"
-        rc = record_configs.get(record_name)
-        cf_enabled = rc.cf_enabled if rc else True
-        # NOTE: Only evaluate up-to-date status when CF DDNS is enabled for this record.
-        # If CF is disabled, the record won't exist in Cloudflare by design — show Unknown,
-        # not "Needs update", to avoid misleading the user.
-        if not cf_enabled:
-            is_up_to_date = None
-        else:
-            is_up_to_date = dns_record is not None and dns_ip == current_ip
-
         # NOTE: Match unified policy by domain name from the pre-fetched map
         unifi_policy = unifi_policy_map.get(record_name)
-        unifi_local_policy = unifi_policy_map.get(_to_local_policy_name(record_name))
+        unifi_local_policy = unifi_policy_map.get(to_local_policy_name(record_name))
 
-        record_data.append({
-            "name": record_name,
-            "cf_record_id": dns_record.id if dns_record else None,
-            "dns_ip": dns_ip,
-            "is_up_to_date": is_up_to_date,
-            "updates": stats.updates if stats else 0,
-            "failures": stats.failures if stats else 0,
-            "last_checked": stats.last_checked.isoformat() if stats and stats.last_checked else None,
-            "last_updated": stats.last_updated.isoformat() if stats and stats.last_updated else None,
-            "unifi_ip": unifi_policy.content if unifi_policy else None,
-            "unifi_local_ip": unifi_local_policy.content if unifi_local_policy else None,
-            "unifi_record_id": unifi_policy.id if unifi_policy else None,
-            # Per-record settings (from RecordConfig, defaults if no row exists)
-            "cfg_cf_enabled": rc.cf_enabled if rc else True,
-            "cfg_ip_mode": rc.ip_mode if rc else "dynamic",
-            "cfg_static_ip": rc.static_ip if rc else "",
-            "cfg_unifi_enabled": rc.unifi_enabled if rc else False,
-            "cfg_unifi_static_ip": rc.unifi_static_ip if rc else "",
-            "cfg_unifi_local_enabled": rc.unifi_local_enabled if rc else False,
-            "cfg_unifi_local_static_ip": rc.unifi_local_static_ip if rc else "",
-            # K8s ingress — populated when a matching Ingress hostname is found
-            "k8s_namespace": k8s_by_hostname[record_name].namespace if record_name in k8s_by_hostname else None,
-            "k8s_ingress_name": k8s_by_hostname[record_name].ingress_name if record_name in k8s_by_hostname else None,
-        })
-
-    # Fetch all A-records in the zone for the discovery panel
-    zone_records: list = []
-    zone_records_error: str | None = None
-    if not api_error:
-        try:
-            zone_records = await dns_service.list_zone_records(zones)
-        except DnsProviderError as exc:
-            logger.warning("Could not fetch zone records: %s", exc)
-            zone_records_error = str(exc)
+        record_data.append(build_record_row(
+            record_name,
+            dns_record=zone_record_map.get(record_name),
+            current_ip=current_ip,
+            stats=stats_bulk.get(record_name),
+            cfg=record_configs.get(record_name),
+            unifi_policy=unifi_policy,
+            unifi_local_policy=unifi_local_policy,
+            k8s_namespace=k8s_by_hostname[record_name].namespace if record_name in k8s_by_hostname else None,
+            k8s_ingress_name=k8s_by_hostname[record_name].ingress_name if record_name in k8s_by_hostname else None,
+            live=True,
+        ))
 
     # Build unified discovery list — one entry per hostname, merging CF, UniFi and K8s.
     # Keyed by hostname so sources are automatically coalesced.
@@ -316,6 +293,7 @@ async def dashboard(
             "records": record_data,
             "interval": config.interval,
             "api_error": api_error,
+            "first_run": bool(not config.api_token or not zones),
             "managed_names": managed_records,
             "unifi_enabled": unifi_enabled,
             "unifi_default_ip": unifi_default_ip,
@@ -333,6 +311,7 @@ async def logs_page(
     request: Request,
     log_service: LogService = Depends(get_log_service),
     config_service: ConfigService = Depends(get_config_service),
+    level: str = Query(default=""),
 ) -> HTMLResponse:
     """
     Renders the full-page activity log viewer.
@@ -341,11 +320,15 @@ async def logs_page(
         request: The incoming FastAPI request.
         log_service: Provides recent log entries.
         config_service: Provides the UI refresh interval for HTMX polling.
+        level: Optional severity filter ("INFO", "WARNING", "ERROR"); empty = all.
 
     Returns:
         An HTMLResponse rendering templates/logs.html.
     """
-    recent_logs = log_service.get_recent(limit=100)
+    if level:
+        recent_logs = log_service.get_by_level(level, limit=100)
+    else:
+        recent_logs = log_service.get_recent(limit=100)
     refresh = await config_service.get_refresh_interval()
     return templates.TemplateResponse(
         request,
@@ -353,6 +336,7 @@ async def logs_page(
         {
             "logs": recent_logs,
             "refresh": refresh,
+            "level": level,
         },
     )
 
@@ -372,7 +356,6 @@ async def settings_page(
     Returns:
         An HTMLResponse rendering templates/settings.html.
     """
-    import json
     config = await config_service.get_config()
     zones = await config_service.get_zones()
     refresh = await config_service.get_refresh_interval()
@@ -381,13 +364,14 @@ async def settings_page(
         request,
         "settings.html",
         {
-            "api_token": config.api_token,
+            "api_token": mask_secret(config.api_token),
             "zones": json.dumps(zones),
             "interval": config.interval,
             "refresh": refresh,
+            "log_retention_days": config.log_retention_days,
             "k8s_enabled": config.k8s_enabled,
             "unifi_host": unifi_host,
-            "unifi_api_key": unifi_api_key,
+            "unifi_api_key": mask_secret(unifi_api_key),
             "unifi_site_id": unifi_site_id,
             "unifi_default_ip": unifi_default_ip,
             "unifi_enabled": unifi_enabled,

@@ -9,11 +9,12 @@ Does NOT: manage DNS records, fetch IPs, or read application configuration.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 
 from sqlmodel import Session, select
 
 from db.models import LogEntry
+from utils import utcnow_naive
 
 logger = logging.getLogger(__name__)
 
@@ -43,34 +44,51 @@ class LogService:
     # Write operations
     # ---------------------------------------------------------------------------
 
-    def log(self, message: str, level: str = "INFO") -> LogEntry:
+    def log(self, message: str, level: str = "INFO", commit: bool = True) -> LogEntry:
         """
         Writes a single log entry to the database.
 
         Also emits the message to Python's standard logging so it appears
-        in the uvicorn/container log stream.
+        in the uvicorn/container log stream.  Pass ``commit=False`` when
+        batching a whole check cycle so all rows are committed with one
+        ``flush()`` at the end (see DnsService.run_check_cycle).
 
         Args:
             message: The human-readable log message.
             level: Log severity string ("INFO", "WARNING", "ERROR").
+            commit: Whether to commit immediately.  False defers the commit
+                to a later ``flush()`` call.
 
         Returns:
             The persisted LogEntry instance.
         """
         entry = LogEntry(
-            timestamp=datetime.now(timezone.utc).replace(tzinfo=None),
+            timestamp=utcnow_naive(),
             level=level.upper(),
             message=message,
         )
         self._session.add(entry)
-        self._session.commit()
-        self._session.refresh(entry)
+        if commit:
+            self._session.commit()
+            self._session.refresh(entry)
 
         # Mirror to Python logging so the message appears in container stdout
         _level_int = getattr(logging, level.upper(), logging.INFO)
         logger.log(_level_int, message)
 
         return entry
+
+    def flush(self) -> None:
+        """
+        Commits all pending log rows accumulated with ``commit=False``.
+
+        Intended to be called once at the end of a batched write sequence so
+        the DB is hit with a single commit instead of one per entry.
+
+        Returns:
+            None
+        """
+        self._session.commit()
 
     # ---------------------------------------------------------------------------
     # Read operations
@@ -149,7 +167,7 @@ class LogService:
         Returns:
             The number of entries deleted.
         """
-        cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days)
+        cutoff = utcnow_naive() - timedelta(days=days)
         statement = select(LogEntry).where(LogEntry.timestamp < cutoff)
         old_entries = list(self._session.exec(statement).all())
 

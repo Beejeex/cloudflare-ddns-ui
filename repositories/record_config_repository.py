@@ -114,3 +114,79 @@ class RecordConfigRepository:
             self._session.delete(row)
             self._session.commit()
             logger.debug("Deleted RecordConfig for %s", record_name)
+
+    # ---------------------------------------------------------------------------
+    # Bulk operations
+    # ---------------------------------------------------------------------------
+
+    def set_flag_all(self, record_names: list[str], flag: str, enabled: bool) -> int:
+        """
+        Sets a RecordConfig boolean flag on every listed record in one commit.
+
+        Rows are upserted: existing rows are updated in place, missing rows are
+        created with defaults plus the flag.  A single commit covers the whole
+        batch so the operation is one transaction, not N.
+
+        Args:
+            record_names: List of managed FQDNs to update.
+            flag: The RecordConfig field name to set (e.g. "cf_enabled").
+            enabled: The boolean value to write.
+
+        Returns:
+            The number of records updated.
+
+        Raises:
+            ValueError: If the flag is not a known boolean RecordConfig field.
+        """
+        if flag not in {"cf_enabled", "unifi_enabled", "unifi_local_enabled"}:
+            raise ValueError(f"Unsupported RecordConfig flag: {flag}")
+        if not record_names:
+            return 0
+
+        existing = self._session.exec(
+            select(RecordConfig).where(RecordConfig.record_name.in_(record_names))
+        ).all()
+        by_name = {row.record_name: row for row in existing}
+
+        for name in record_names:
+            config = by_name.get(name)
+            if config is None:
+                config = RecordConfig(record_name=name)
+                self._session.add(config)
+            setattr(config, flag, enabled)
+
+        self._session.commit()
+        return len(record_names)
+
+    def set_cf_enabled_all(self, record_names: list[str], enabled: bool) -> int:
+        """
+        Enables or disables Cloudflare DDNS for every listed record at once.
+
+        Args:
+            record_names: List of managed FQDNs to update.
+            enabled: Whether Cloudflare DDNS should be on or off.
+
+        Returns:
+            The number of records updated.
+        """
+        return self.set_flag_all(record_names, "cf_enabled", enabled)
+
+    def set_unifi_enabled_all(self, record_names: list[str], enabled: bool) -> int:
+        """
+        Enables or disables UniFi DNS management for every listed record at once.
+
+        Disabling also clears the ``.local`` companion flag so the scheduler's
+        sync pass deletes those policies on the next cycle — mirroring what the
+        per-record toggle does.
+
+        Args:
+            record_names: List of managed FQDNs to update.
+            enabled: Whether UniFi DNS management should be on or off.
+
+        Returns:
+            The number of records updated.
+        """
+        count = self.set_flag_all(record_names, "unifi_enabled", enabled)
+        if not enabled:
+            self.set_flag_all(record_names, "unifi_local_enabled", False)
+        return count

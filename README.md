@@ -38,11 +38,19 @@ A self-hosted Dynamic DNS dashboard. Monitors your host machine's public IP addr
 - **Status indicators** — per-record badges showing current DNS IP vs. detected IP, UniFi sync status, and K8s discovery status
 - **Provider active dots** — header indicators show when UniFi and Kubernetes integrations are live
 - **Error banners** — inline alerts for Cloudflare API errors and UniFi API errors with a direct link to Settings
+- **First-run onboarding** — when no token/zones are configured, a "Get started" card walks through token → verify zones → add first record
+- **Per-record "Check now"** — force a single record's DDNS check from its actions menu
+- **Bulk actions** — enable/disable Cloudflare or UniFi DNS for all managed records in one click (with confirmation)
+- **IP change history** — per-record timeline of every IP transition (scheduler / manual / create), shown in each record's config modal
+- **CSV log export** — download the recent activity log as CSV
+- **Secret masking** — API tokens/keys are shown masked (last 4 chars only); saving an unchanged mask keeps the stored secret
 
 ### Infrastructure
 - **Single container** — SQLite database, background scheduler, and file watcher all in one `python:3.12-slim` image
 - **Health endpoint** — `GET /health` for Docker `HEALTHCHECK` and uptime monitors
+- **Prometheus metrics** — `GET /metrics` exposes per-record update/failure/check counters and cycle duration
 - **Automatic DB migrations** — new schema columns are applied on startup; no migration tool required
+- **IP-provider fallback** — public IP fetched from `api.ipify.org` with `icanhazip.com` / `ifconfig.me` fallbacks
 - **Settings UI** — configure all credentials and options via web form; no JSON editing, no environment variables
 
 ---
@@ -85,11 +93,20 @@ docker run -d \
   ddns-dashboard
 ```
 
+> **Single worker required.** The app uses an in-process SSE broadcaster and a
+> single SQLite file, so it must run with `--workers 1`. The shipped Docker
+> `CMD` already enforces this — do not run multiple replicas against the same
+> volume.
+
 ---
 
 ## Configuration
 
 All configuration is stored in `/config/ddns.db` (SQLite) inside the container. Mount `/config` as a volume so settings and logs survive restarts. Everything is managed through the Settings page — no environment variables or config files required.
+
+> **Restrict access to `/config`.** The database stores the Cloudflare and UniFi
+> API secrets in plaintext. Mount it on a private, owner-only path (e.g.
+> `chmod 700` on the host directory) and never expose it publicly.
 
 ### Cloudflare
 
@@ -98,7 +115,7 @@ All configuration is stored in `/config/ddns.db` (SQLite) inside the container. 
 | **API Token** | Cloudflare API token with `Zone:DNS:Edit` permission |
 | **Zones** | One or more domain → Zone ID pairs (e.g. `example.com` → `abc123...`) |
 | **Check Interval** | How often (seconds) to check for an IP change (default: `300`) |
-| **Log Retention** | How many days to keep log entries (default: `30`) |
+| **Log Retention** | How many days to keep log entries (default: `7`) |
 
 ### UniFi Internal DNS *(optional)*
 
@@ -109,6 +126,7 @@ All configuration is stored in `/config/ddns.db` (SQLite) inside the container. 
 | **Site ID** | UniFi site UUID used as the DNS policy zone |
 | **Default Internal IP** | Fallback IP used when a record has no per-record IP set |
 | **Enable UniFi** | Master toggle — disables all UniFi sync when off |
+| **CA Bundle (optional)** | Path to a PEM CA bundle used to verify the controller's certificate (env `UNIFI_CA_BUNDLE`). Leave unset to skip verification for self-signed certs. |
 
 ### Kubernetes Discovery *(optional)*
 
@@ -213,7 +231,7 @@ Images are published to GitHub Container Registry:
 
 ```
 ghcr.io/beejeex/cloudflare-dns-dashboard:latest      # most recent release
-ghcr.io/beejeex/cloudflare-dns-dashboard:v2.1.5      # pinned release
+ghcr.io/beejeex/cloudflare-dns-dashboard:v2.2.0      # pinned release
 ```
 
 ---
@@ -225,8 +243,8 @@ ghcr.io/beejeex/cloudflare-dns-dashboard:v2.1.5      # pinned release
 | `v1.x` | Legacy Flask app — archived |
 | `v2.0.x` | FastAPI rewrite; UniFi + Kubernetes integration; discovery grid; multi-service badges |
 | `v2.1.x` | Unified grid, SSE, Alpine.js, per-record config modal, auto-create CF records, all settings default off |
-| `v2.1.4` | UniFi/local policy independence; remove master UniFi toggle |
-| `v2.1.5` | **Current** |
+| `v2.1.5` | Hardening + robustness: pagination, retries, token verify, import/export, log filtering |
+| `v2.2.0` | **Current** — onboarding, bulk actions, IP change history, CSV export, Prometheus metrics, secret masking, IP-provider fallback |
 
 This is **beta software**. The database schema may change between minor versions. Pin to a specific image tag in production.
 

@@ -15,15 +15,19 @@ import logging
 import os
 
 import httpx
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse
+from shared_templates import APP_VERSION, templates
 from sse_starlette.sse import EventSourceResponse
 
+from cloudflare.cloudflare_client import CloudflareClient
 from cloudflare.unifi_client import UnifiClient
 from dependencies import (
     get_broadcaster,
     get_config_service,
     get_dns_service,
+    get_history_service,
+    get_http_client,
     get_ip_service,
     get_log_service,
     get_record_config_repo,
@@ -32,19 +36,21 @@ from dependencies import (
     get_unifi_http_client,
 )
 from exceptions import DnsProviderError, IpFetchError, UnifiProviderError
+from presenters import build_record_row
 from repositories.record_config_repository import RecordConfigRepository
 from repositories.stats_repository import StatsRepository
 from scheduler import run_ddns_check_now
 from services.broadcast_service import BroadcastService
 from services.config_service import ConfigService
 from services.dns_service import DnsService
+from services.history_service import HistoryService
 from services.ip_service import IpService
 from services.log_service import LogService
+from utils import to_local_policy_name, utcnow_naive
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api")
-from shared_templates import templates  # noqa: E402
 
 # NOTE: Configurable via SSE_PING_INTERVAL env var so integration tests can
 # set it to a short value (e.g. 0.1) and avoid a 25-second hang on teardown.
@@ -124,106 +130,6 @@ async def sse_events(
     return EventSourceResponse(_generator())
 
 
-async def _render_records_for_sse(
-    *,
-    request: Request,
-    config_service: ConfigService,
-    dns_service: DnsService,
-    stats_repo: StatsRepository,
-    record_config_repo: RecordConfigRepository,
-    unifi_client: UnifiClient,
-    current_ip: str,
-) -> str:
-    """
-    Renders the records-table template as an HTML string for SSE delivery.
-
-    Uses fetch_zone_record_map() to batch Cloudflare lookups (one call per
-    zone) and get_bulk() for stats — both added in Phase 2.  Called only
-    on SSE connect so the cost is paid once per new client connection.
-
-    Args:
-        request: The FastAPI request (forwarded to the template context).
-        config_service: Provides config, zones, and managed records.
-        dns_service: Fetches the DNS record map in bulk.
-        stats_repo: Provides per-record stats via a single bulk query.
-        record_config_repo: Provides per-record settings.
-        unifi_client: Fetches UniFi DNS policies.
-        current_ip: The host's current public IP (already fetched by caller).
-
-    Returns:
-        Rendered HTML string from partials/records_table.html.
-    """
-    config = await config_service.get_config()
-    zones = await config_service.get_zones()
-    managed_records = await config_service.get_managed_records()
-    record_configs = record_config_repo.get_all(managed_records)
-    stats_by_name = stats_repo.get_bulk(managed_records)
-
-    _, _, unifi_site_id, unifi_default_ip, unifi_enabled = await config_service.get_unifi_config()
-
-    # Batch Cloudflare lookup — one API call per zone
-    zone_record_map: dict[str, object] = {}
-    if config.api_token and zones:
-        try:
-            zone_record_map = await dns_service.fetch_zone_record_map(managed_records, zones)
-        except Exception as exc:
-            logger.warning("SSE records render: CF zone fetch failed: %s", exc)
-
-    # Batch UniFi policy lookup
-    unifi_policy_map: dict[str, object] = {}
-    if unifi_enabled and unifi_client.is_configured() and unifi_site_id:
-        try:
-            policies = await unifi_client.list_records(unifi_site_id)
-            unifi_policy_map = {p.name: p for p in policies}
-        except UnifiProviderError as exc:
-            logger.warning("SSE records render: UniFi policy fetch failed: %s", exc)
-
-    record_data = []
-    for record_name in managed_records:
-        dns_record = zone_record_map.get(record_name)
-        stats = stats_by_name.get(record_name)
-        rc = record_configs.get(record_name)
-        dns_ip = dns_record.content if dns_record else "Not Found"
-        cf_enabled = rc.cf_enabled if rc else True
-        is_up_to_date = (
-            None if not cf_enabled
-            else (dns_record is not None and dns_ip == current_ip)
-        )
-        unifi_policy = unifi_policy_map.get(record_name)
-        local_name = _to_local_policy_name(record_name)
-        unifi_local_policy = unifi_policy_map.get(local_name) if local_name != record_name else None
-
-        record_data.append({
-            "name": record_name,
-            "cf_record_id": dns_record.id if dns_record else None,
-            "dns_ip": dns_ip,
-            "is_up_to_date": is_up_to_date,
-            "updates": stats.updates if stats else 0,
-            "failures": stats.failures if stats else 0,
-            "last_checked": stats.last_checked.isoformat() if stats and stats.last_checked else None,
-            "last_updated": stats.last_updated.isoformat() if stats and stats.last_updated else None,
-            "unifi_ip": unifi_policy.content if unifi_policy else None,
-            "unifi_local_ip": unifi_local_policy.content if unifi_local_policy else None,
-            "unifi_record_id": unifi_policy.id if unifi_policy else None,
-            "cfg_cf_enabled": rc.cf_enabled if rc else True,
-            "cfg_ip_mode": rc.ip_mode if rc else "dynamic",
-            "cfg_static_ip": rc.static_ip if rc else "",
-            "cfg_unifi_enabled": rc.unifi_enabled if rc else False,
-            "cfg_unifi_static_ip": rc.unifi_static_ip if rc else "",
-            "cfg_unifi_local_enabled": rc.unifi_local_enabled if rc else False,
-            "cfg_unifi_local_static_ip": rc.unifi_local_static_ip if rc else "",
-        })
-
-    return templates.get_template("partials/records_table.html").render(
-        {
-            "request": request,
-            "records": record_data,
-            "unifi_enabled": unifi_enabled,
-            "unifi_default_ip": unifi_default_ip,
-        }
-    )
-
-
 # ---------------------------------------------------------------------------
 # Manual sync trigger
 # ---------------------------------------------------------------------------
@@ -248,6 +154,7 @@ async def trigger_sync(request: Request) -> HTMLResponse:
         http_client=request.app.state.http_client,
         unifi_http_client=request.app.state.unifi_http_client,
         broadcaster=getattr(request.app.state, "broadcaster", None),
+        app_state=request.app.state,
     )
     # Empty body — the HTMX after-request handler triggers location.reload()
     return HTMLResponse(content="", status_code=200)
@@ -256,6 +163,7 @@ async def trigger_sync(request: Request) -> HTMLResponse:
 @router.get("/logs/recent", response_class=HTMLResponse)
 async def get_recent_logs(
     request: Request,
+    level: str = Query(default=""),
     log_service: LogService = Depends(get_log_service),
 ) -> HTMLResponse:
     """
@@ -266,12 +174,16 @@ async def get_recent_logs(
 
     Args:
         request: The incoming FastAPI request.
+        level: Optional severity filter ("INFO", "WARNING", "ERROR"); empty = all.
         log_service: Provides recent log entries from the DB.
 
     Returns:
         An HTMLResponse containing the log-panel partial fragment.
     """
-    recent_logs = log_service.get_recent(limit=100)
+    if level:
+        recent_logs = log_service.get_by_level(level, limit=100)
+    else:
+        recent_logs = log_service.get_recent(limit=100)
     return templates.TemplateResponse(
         request,
         "partials/log_panel.html",
@@ -279,41 +191,80 @@ async def get_recent_logs(
     )
 
 
+@router.get("/logs/export", response_class=PlainTextResponse)
+async def export_logs_csv(
+    request: Request,
+    log_service: LogService = Depends(get_log_service),
+) -> PlainTextResponse:
+    """
+    Exports the recent log entries as a CSV download.
+
+    Args:
+        request: The incoming FastAPI request.
+        log_service: Provides recent log entries from the DB.
+
+    Returns:
+        A PlainTextResponse containing CSV with a Content-Disposition header.
+    """
+    import csv
+    import io
+
+    entries = log_service.get_recent(limit=1000)
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(["timestamp", "level", "message"])
+    for entry in entries:
+        writer.writerow([
+            entry.timestamp.isoformat() if entry.timestamp else "",
+            entry.level,
+            entry.message,
+        ])
+    filename = f"ddns-logs-{utcnow_naive().strftime('%Y%m%d')}.csv"
+    return PlainTextResponse(
+        content=buffer.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @router.get("/current-ip", response_class=PlainTextResponse)
-async def current_ip(request: Request) -> str:
+async def current_ip(
+    request: Request,
+    ip_service: IpService = Depends(get_ip_service),
+) -> str:
     """
     Returns the host's current public IP as plain text for the navbar HTMX poll.
 
     Args:
         request: The incoming FastAPI request.
+        ip_service: Cache-aware provider of the current public IP.
 
     Returns:
         The public IP address string, or "Unavailable" on failure.
     """
     try:
-        from services.ip_service import IpService
-        ip_service = IpService(request.app.state.http_client, app_state=request.app.state)
         return await ip_service.get_public_ip()
     except IpFetchError as exc:
         logger.warning("Could not fetch public IP for navbar: %s", exc)
         return "Unavailable"
 
 
-@router.get("/unifi/sites", response_class=HTMLResponse)
+@router.post("/unifi/sites", response_class=HTMLResponse)
 async def get_unifi_sites(
     request: Request,
-    unifi_host: str = Query(default="", alias="unifi_host"),
-    unifi_api_key: str = Query(default="", alias="unifi_api_key"),
+    unifi_host: str = Form(default="", alias="unifi_host"),
+    unifi_api_key: str = Form(default="", alias="unifi_api_key"),
     http_client: httpx.AsyncClient = Depends(get_unifi_http_client),
 ) -> HTMLResponse:
     """
     Queries the UniFi controller for all available sites and returns an HTML
     partial so the settings page can auto-fill or show a picker for the Site ID.
 
-    Accepts the host and api_key as query parameters so the user does not need
-    to save settings first.
+    Accepts the host and api_key in the form body (never as query parameters,
+    which proxies may log) so the user does not need to save settings first.
 
     Args:
+        request: The incoming FastAPI request.
         unifi_host: UniFi controller host (IP or hostname).
         unifi_api_key: UniFi API key.
         http_client: Shared async client with verify=False.
@@ -321,17 +272,26 @@ async def get_unifi_sites(
     Returns:
         HTML partial rendered from partials/unifi_sites.html.
     """
-    context: dict = {"request": request, "sites": [], "error": None}
+    context: dict = {"sites": [], "error": None}
     if not unifi_host or not unifi_api_key:
         context["error"] = "Enter a host and API key first."
     else:
-        client = UnifiClient(http_client=http_client, api_key=unifi_api_key, host=unifi_host)
+        client = UnifiClient(
+            http_client=http_client,
+            api_key=unifi_api_key,
+            host=unifi_host,
+            cache=getattr(request.app.state, "listing_cache", None),
+        )
         try:
             context["sites"] = await client.list_sites()
         except UnifiProviderError as exc:
             logger.warning("UniFi site discovery failed: %s", exc)
             context["error"] = str(exc)
-    return templates.TemplateResponse("partials/unifi_sites.html", context)
+    return templates.TemplateResponse(
+        request,
+        "partials/unifi_sites.html",
+        context,
+    )
 
 
 @router.get("/health/json")
@@ -345,8 +305,198 @@ async def health_json() -> dict:
     return {"status": "ok"}
 
 
+@router.post("/verify-token", response_class=HTMLResponse)
+async def verify_token(
+    request: Request,
+    api_token: str = Form(...),
+    http_client: httpx.AsyncClient = Depends(get_http_client),
+) -> HTMLResponse:
+    """
+    Verifies a Cloudflare API token and returns its zones as an HTML fragment.
+
+    The token is sent in the form body (never as a query parameter, which
+    proxies may log). On success the fragment lists the accessible zones as
+    click-to-add buttons for the Settings page's Alpine zone array.
+
+    Args:
+        request: The incoming FastAPI request.
+        api_token: The Cloudflare API token to verify.
+        http_client: The shared httpx.AsyncClient.
+
+    Returns:
+        An HTMLResponse fragment: a success/error badge plus zone buttons.
+    """
+    client = CloudflareClient(
+        http_client=http_client,
+        api_token=api_token,
+        cache=getattr(request.app.state, "listing_cache", None),
+    )
+    try:
+        valid = await client.verify_token()
+    except DnsProviderError as exc:
+        logger.warning("Token verification failed: %s", exc)
+        return HTMLResponse(
+            f'<span class="badge" style="color:#dc2626;">&#9888; Verification failed: {exc}</span>'
+        )
+    if not valid:
+        return HTMLResponse(
+            '<span class="badge" style="color:#dc2626;">&#9888; Token is invalid or inactive.</span>'
+        )
+
+    try:
+        zones = await client.list_zones()
+    except DnsProviderError as exc:
+        logger.warning("Zone listing failed: %s", exc)
+        zones = []
+
+    zone_buttons = "".join(
+        f'<button type="button" class="btn btn-ghost btn-sm" style="margin:0.15rem;" '
+        f'@click="addZone({json.dumps(z["name"])}, {json.dumps(z["id"])})">+ {z["name"]}</button>'
+        for z in zones
+    )
+    zone_list = zone_buttons or (
+        '<span style="font-size:0.8rem; color:#94a3b8;">No zones found for this token.</span>'
+    )
+    return HTMLResponse(
+        f'<div>'
+        f'<span class="badge" style="color:#16a34a;">&#10003; Token valid</span>'
+        f'<div style="margin-top:0.4rem; font-size:0.8rem; color:#475569;">Zones found — click to add:</div>'
+        f'<div style="margin-top:0.25rem;">{zone_list}</div>'
+        f'</div>'
+    )
+
+
+# ---------------------------------------------------------------------------
+# Configuration backup / migration
+# ---------------------------------------------------------------------------
+
+
+@router.get("/export")
+async def export_config(
+    request: Request,
+    config_service: ConfigService = Depends(get_config_service),
+    record_config_repo: RecordConfigRepository = Depends(get_record_config_repo),
+) -> PlainTextResponse:
+    """
+    Exports all configuration (settings, managed records, per-record config) as JSON.
+
+    The response is a downloadable attachment for backup or migration purposes.
+
+    Args:
+        request: The incoming FastAPI request.
+        config_service: Provides application configuration.
+        record_config_repo: Provides per-record settings.
+
+    Returns:
+        A PlainTextResponse containing the JSON payload as a download.
+    """
+    config = await config_service.get_config()
+    records = await config_service.get_managed_records()
+    record_configs = record_config_repo.get_all(records)
+    payload = {
+        "version": APP_VERSION,
+        "exported_at": utcnow_naive().isoformat(),
+        "config": {
+            "api_token": config.api_token,
+            "zones": await config_service.get_zones(),
+            "records": records,
+            "refresh": config.refresh,
+            "interval": config.interval,
+            "log_retention_days": config.log_retention_days,
+            "k8s_enabled": config.k8s_enabled,
+            "unifi_host": config.unifi_host,
+            "unifi_api_key": config.unifi_api_key,
+            "unifi_site_id": config.unifi_site_id,
+            "unifi_default_ip": config.unifi_default_ip,
+            "unifi_enabled": config.unifi_enabled,
+        },
+        "record_configs": [
+            {
+                "record_name": rc.record_name,
+                "cf_enabled": rc.cf_enabled,
+                "ip_mode": rc.ip_mode,
+                "static_ip": rc.static_ip,
+                "unifi_enabled": rc.unifi_enabled,
+                "unifi_static_ip": rc.unifi_static_ip,
+                "unifi_local_enabled": rc.unifi_local_enabled,
+                "unifi_local_static_ip": rc.unifi_local_static_ip,
+            }
+            for rc in record_configs.values()
+        ],
+    }
+    filename = f"ddns-config-{utcnow_naive().strftime('%Y%m%d')}.json"
+    return PlainTextResponse(
+        content=json.dumps(payload, indent=2),
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.post("/import")
+async def import_config(
+    request: Request,
+    config_service: ConfigService = Depends(get_config_service),
+    record_config_repo: RecordConfigRepository = Depends(get_record_config_repo),
+    log_service: LogService = Depends(get_log_service),
+) -> dict:
+    """
+    Imports configuration from an exported JSON payload.
+
+    Restores the main settings, the managed-records list, and per-record
+    configs. The response reports how many records and zones were imported.
+
+    Args:
+        request: The incoming FastAPI request (JSON body).
+        config_service: Provides application configuration.
+        record_config_repo: Provides per-record settings.
+        log_service: Writes a UI log entry on completion.
+
+    Returns:
+        A dict with "ok", "records", and "zones" keys.
+    """
+    body = await request.json()
+    cfg_data = body.get("config") or {}
+
+    zones: dict[str, str] = cfg_data.get("zones") or {}
+    records: list[str] = cfg_data.get("records") or []
+    await config_service.update_credentials(
+        api_token=cfg_data.get("api_token", ""),
+        zones=zones,
+        refresh=int(cfg_data.get("refresh", 30)),
+        interval=int(cfg_data.get("interval", 300)),
+        log_retention_days=int(cfg_data.get("log_retention_days", 7)),
+        k8s_enabled=bool(cfg_data.get("k8s_enabled", False)),
+        unifi_host=cfg_data.get("unifi_host", ""),
+        unifi_api_key=cfg_data.get("unifi_api_key", ""),
+        unifi_site_id=cfg_data.get("unifi_site_id", ""),
+        unifi_default_ip=cfg_data.get("unifi_default_ip", ""),
+        unifi_enabled=bool(cfg_data.get("unifi_enabled", False)),
+    )
+    await config_service.replace_managed_records(records)
+
+    for rc_data in body.get("record_configs") or []:
+        rc = record_config_repo.get(rc_data["record_name"])
+        rc.cf_enabled = bool(rc_data.get("cf_enabled", False))
+        rc.ip_mode = rc_data.get("ip_mode", "dynamic")
+        rc.static_ip = rc_data.get("static_ip", "")
+        rc.unifi_enabled = bool(rc_data.get("unifi_enabled", False))
+        rc.unifi_static_ip = rc_data.get("unifi_static_ip", "")
+        rc.unifi_local_enabled = bool(rc_data.get("unifi_local_enabled", False))
+        rc.unifi_local_static_ip = rc_data.get("unifi_local_static_ip", "")
+        record_config_repo.save(rc)
+
+    log_service.log(
+        f"Imported configuration: {len(records)} record(s), {len(zones)} zone(s).",
+        level="INFO",
+    )
+    return {"ok": True, "records": len(records), "zones": len(zones)}
+
+
 @router.get("/next-check-in")
-async def next_check_in(request: Request) -> dict:
+async def next_check_in(
+    request: Request,
+    config_service: ConfigService = Depends(get_config_service),
+) -> dict:
     """
     Returns the seconds remaining until the next scheduled DDNS check.
 
@@ -355,31 +505,27 @@ async def next_check_in(request: Request) -> dict:
 
     Args:
         request: The incoming FastAPI request.
+        config_service: Provides the configured DDNS check interval.
 
     Returns:
         A dict with "seconds" (int) and "interval" (int) keys.
     """
     from datetime import datetime, timezone
-    from repositories.config_repository import ConfigRepository
-    from db.database import engine
-    from sqlmodel import Session
 
-    interval = 300
-    try:
-        with Session(engine) as session:
-            interval = ConfigRepository(session).load().interval
-    except Exception:
-        pass
-
+    interval = await config_service.get_check_interval()
     seconds_remaining = interval
-    try:
-        scheduler = request.app.state.scheduler
-        job = scheduler.get_job("ddns_check")
-        if job and job.next_run_time:
-            delta = job.next_run_time - datetime.now(timezone.utc)
-            seconds_remaining = max(0, int(delta.total_seconds()))
-    except Exception as exc:
-        logger.debug("Could not read scheduler next_run_time: %s", exc)
+
+    scheduler = getattr(request.app.state, "scheduler", None)
+    if scheduler is not None:
+        # NOTE: get_job()/next_run_time can fail if the scheduler has not
+        # started yet or was shut down — fall back to the configured interval.
+        try:
+            job = scheduler.get_job("ddns_check")
+            if job and job.next_run_time:
+                delta = job.next_run_time - datetime.now(timezone.utc)
+                seconds_remaining = max(0, int(delta.total_seconds()))
+        except (AttributeError, ValueError) as exc:
+            logger.debug("Could not read scheduler next_run_time: %s", exc)
 
     return {"seconds": seconds_remaining, "interval": interval}
 
@@ -387,17 +533,6 @@ async def next_check_in(request: Request) -> dict:
 # ---------------------------------------------------------------------------
 # Records live refresh
 # ---------------------------------------------------------------------------
-
-
-def _to_local_policy_name(record_name: str) -> str:
-    """Converts a managed FQDN to its .local counterpart (keep in sync with scheduler.py)."""
-    name = record_name.strip()
-    if name.endswith(".local"):
-        return name
-    parts = name.rsplit(".", 1)
-    if len(parts) == 1:
-        return name
-    return f"{parts[0]}.local"
 
 
 @router.get("/records", response_class=HTMLResponse)
@@ -408,6 +543,7 @@ async def get_records(
     stats_repo: StatsRepository = Depends(get_stats_repo),
     unifi_client: UnifiClient = Depends(get_unifi_client),
     record_config_repo: RecordConfigRepository = Depends(get_record_config_repo),
+    ip_service: IpService = Depends(get_ip_service),
 ) -> HTMLResponse:
     """
     Returns the managed records table as an HTMX fragment, plus OOB stat card updates.
@@ -422,6 +558,7 @@ async def get_records(
         stats_repo: Provides per-record update/failure counters (bulk query).
         unifi_client: Fetches live UniFi DNS policies.
         record_config_repo: Provides per-record settings.
+        ip_service: Cache-aware provider of the current public IP.
 
     Returns:
         An HTMLResponse with the records-table partial followed by
@@ -435,8 +572,6 @@ async def get_records(
     # Fetch current public IP — fall back to empty string on failure.
     current_ip = ""
     try:
-        from services.ip_service import IpService
-        ip_service = IpService(request.app.state.http_client, app_state=request.app.state)
         current_ip = await ip_service.get_public_ip()
     except IpFetchError as exc:
         logger.warning("Could not fetch public IP for records refresh: %s", exc)
@@ -462,39 +597,18 @@ async def get_records(
 
     record_data = []
     for record_name in managed_records:
-        dns_record = zone_record_map.get(record_name)
-        stats = stats_bulk.get(record_name)
-        dns_ip = dns_record.content if dns_record else "Not Found"
-        rc = record_configs.get(record_name)
-        cf_enabled = rc.cf_enabled if rc else True
-        if not cf_enabled:
-            is_up_to_date = None
-        else:
-            is_up_to_date = dns_record is not None and (dns_ip == current_ip)
-
         unifi_policy = unifi_policy_map.get(record_name)
-        unifi_local_policy = unifi_policy_map.get(_to_local_policy_name(record_name))
-
-        record_data.append({
-            "name": record_name,
-            "cf_record_id": dns_record.id if dns_record else None,
-            "dns_ip": dns_ip,
-            "is_up_to_date": is_up_to_date,
-            "updates": stats.updates if stats else 0,
-            "failures": stats.failures if stats else 0,
-            "last_checked": stats.last_checked.isoformat() if stats and stats.last_checked else None,
-            "last_updated": stats.last_updated.isoformat() if stats and stats.last_updated else None,
-            "unifi_ip": unifi_policy.content if unifi_policy else None,
-            "unifi_local_ip": unifi_local_policy.content if unifi_local_policy else None,
-            "unifi_record_id": unifi_policy.id if unifi_policy else None,
-            "cfg_cf_enabled": rc.cf_enabled if rc else True,
-            "cfg_ip_mode": rc.ip_mode if rc else "dynamic",
-            "cfg_static_ip": rc.static_ip if rc else "",
-            "cfg_unifi_enabled": rc.unifi_enabled if rc else False,
-            "cfg_unifi_static_ip": rc.unifi_static_ip if rc else "",
-            "cfg_unifi_local_enabled": rc.unifi_local_enabled if rc else False,
-            "cfg_unifi_local_static_ip": rc.unifi_local_static_ip if rc else "",
-        })
+        unifi_local_policy = unifi_policy_map.get(to_local_policy_name(record_name))
+        record_data.append(build_record_row(
+            record_name,
+            dns_record=zone_record_map.get(record_name),
+            current_ip=current_ip,
+            stats=stats_bulk.get(record_name),
+            cfg=record_configs.get(record_name),
+            unifi_policy=unifi_policy,
+            unifi_local_policy=unifi_local_policy,
+            live=True,
+        ))
 
     # Render records table partial as the main swap target.
     records_html = templates.get_template("partials/records_table.html").render(
@@ -541,5 +655,38 @@ async def get_record_error_logs(
     return templates.TemplateResponse(
         request,
         "partials/record_error_log.html",
+        {"entries": entries, "record_name": record_name},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Per-record IP change history
+# ---------------------------------------------------------------------------
+
+
+@router.get("/records/{record_name:path}/history", response_class=HTMLResponse)
+async def get_record_history(
+    request: Request,
+    record_name: str,
+    history_service: HistoryService = Depends(get_history_service),
+) -> HTMLResponse:
+    """
+    Returns the recent IP change timeline for a record as an HTML fragment.
+
+    Used by the dashboard's per-record config modal — the "IP change history"
+    button loads this fragment on demand and swaps it into the modal.
+
+    Args:
+        request: The incoming FastAPI request.
+        record_name: The FQDN to show history for (path parameter).
+        history_service: Provides the per-record IP change timeline.
+
+    Returns:
+        An HTMLResponse containing partials/record_history.html.
+    """
+    entries = history_service.get_history(record_name, limit=30)
+    return templates.TemplateResponse(
+        request,
+        "partials/record_history.html",
         {"entries": entries, "record_name": record_name},
     )

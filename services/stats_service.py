@@ -37,19 +37,20 @@ class StatsService:
         """
         self._repo = stats_repo
 
-    async def record_checked(self, record_name: str) -> RecordStats:
+    async def record_checked(self, record_name: str, commit: bool = True) -> RecordStats:
         """
         Records that a DNS record was checked (updates last_checked timestamp).
 
         Args:
             record_name: The fully-qualified DNS name that was checked.
+            commit: Whether to commit immediately (False = batched cycle).
 
         Returns:
             The updated RecordStats instance.
         """
-        return self._repo.record_check(record_name)
+        return self._repo.record_check(record_name, commit=commit)
 
-    async def record_updated(self, record_name: str) -> RecordStats:
+    async def record_updated(self, record_name: str, commit: bool = True) -> RecordStats:
         """
         Records a successful IP update for the given DNS record.
 
@@ -57,14 +58,15 @@ class StatsService:
 
         Args:
             record_name: The fully-qualified DNS name that was updated.
+            commit: Whether to commit immediately (False = batched cycle).
 
         Returns:
             The updated RecordStats instance.
         """
         logger.info("Stats: update recorded for %s.", record_name)
-        return self._repo.record_update(record_name)
+        return self._repo.record_update(record_name, commit=commit)
 
-    async def record_failed(self, record_name: str) -> RecordStats:
+    async def record_failed(self, record_name: str, commit: bool = True) -> RecordStats:
         """
         Records a failed update attempt for the given DNS record.
 
@@ -72,12 +74,13 @@ class StatsService:
 
         Args:
             record_name: The fully-qualified DNS name whose update failed.
+            commit: Whether to commit immediately (False = batched cycle).
 
         Returns:
             The updated RecordStats instance.
         """
         logger.warning("Stats: failure recorded for %s.", record_name)
-        return self._repo.record_failure(record_name)
+        return self._repo.record_failure(record_name, commit=commit)
 
     async def get_all(self) -> list[RecordStats]:
         """
@@ -100,31 +103,33 @@ class StatsService:
         """
         return self._repo.get_by_name(record_name)
 
-    async def reset_failures(self, record_name: str) -> RecordStats:
+    async def reset_failures(self, record_name: str, commit: bool = True) -> RecordStats:
         """
         Resets the failure counter to zero for the given DNS record.
 
         Args:
             record_name: The fully-qualified DNS name whose failures to clear.
+            commit: Whether to commit immediately (False = batched cycle).
 
         Returns:
             The updated RecordStats instance.
         """
         logger.info("Stats: failures reset for %s.", record_name)
-        return self._repo.reset_failures(record_name)
+        return self._repo.reset_failures(record_name, commit=commit)
 
-    async def reset_updates(self, record_name: str) -> RecordStats:
+    async def reset_updates(self, record_name: str, commit: bool = True) -> RecordStats:
         """
         Resets the updates counter to zero for the given DNS record.
 
         Args:
             record_name: The fully-qualified DNS name whose updates counter to clear.
+            commit: Whether to commit immediately (False = batched cycle).
 
         Returns:
             The updated RecordStats instance.
         """
         logger.info("Stats: updates reset for %s.", record_name)
-        return self._repo.reset_updates(record_name)
+        return self._repo.reset_updates(record_name, commit=commit)
 
     async def delete_for_record(self, record_name: str) -> bool:
         """

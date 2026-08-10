@@ -11,12 +11,12 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
 
 import httpx
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 from db.database import init_db
@@ -26,6 +26,7 @@ from routes.api_routes import router as api_router
 from routes.ui_routes import router as ui_router
 from scheduler import create_scheduler
 from services.broadcast_service import BroadcastService
+from shared_templates import APP_VERSION
 from watcher import create_observer
 
 # ---------------------------------------------------------------------------
@@ -38,12 +39,6 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Templates — shared Jinja2 instance used by all route handlers
-# ---------------------------------------------------------------------------
-
-from shared_templates import APP_VERSION, templates  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Lifespan — startup and shutdown logic
@@ -84,18 +79,26 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Shared IP cache — populated by IpService; shared across all requests
     app.state.ip_cache = {"ip": None, "fetched_at": 0.0}
 
+    # Shared listing cache — populated by Cloudflare/UniFi clients so the
+    # scheduler cycle and UI page loads share zone/site listings per interval
+    app.state.listing_cache = {}
+
     # SSE broadcaster — fan-out bus for all connected SSE clients
     app.state.broadcaster = BroadcastService()
 
     # NOTE: UniFi controllers use self-signed certs so a dedicated client with
     # verify=False is kept for all UniFi calls rather than disabling SSL globally.
-    unifi_http_client = httpx.AsyncClient(verify=False, timeout=10.0)
+    # Defense-in-depth: set UNIFI_CA_BUNDLE to a PEM bundle path to verify the
+    # controller's certificate instead of disabling verification entirely.
+    unifi_verify = os.getenv("UNIFI_CA_BUNDLE", "") or False
+    unifi_http_client = httpx.AsyncClient(verify=unifi_verify, timeout=10.0)
     app.state.unifi_http_client = unifi_http_client
 
     # 3. Scheduler — read initial check interval from DB config
+    from sqlmodel import Session
+
     from db.database import engine
     from repositories.config_repository import ConfigRepository
-    from sqlmodel import Session
 
     with Session(engine) as session:
         config_repo = ConfigRepository(session)
@@ -107,6 +110,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         unifi_http_client=unifi_http_client,
         interval_seconds=interval,
         broadcaster=app.state.broadcaster,
+        app_state=app,
     )
     scheduler.start()
     app.state.scheduler = scheduler
@@ -152,7 +156,10 @@ def create_app() -> FastAPI:
     application = FastAPI(
         title="Cloudflare DDNS Dashboard",
         description="Monitors public IP and updates Cloudflare DNS A-records automatically.",
-        version="2.1.5",
+        # NOTE: Single source of truth — APP_VERSION (e.g. "v2.2.0") is shared
+        # with the UI via shared_templates.py; strip the leading "v" for the
+        # numeric version string FastAPI expects.
+        version=APP_VERSION.removeprefix("v"),
         lifespan=lifespan,
     )
 
@@ -171,7 +178,61 @@ def create_app() -> FastAPI:
     @application.get("/health", tags=["ops"])
     def health() -> dict:
         """Liveness probe used by Docker HEALTHCHECK."""
-        return {"status": "ok"}
+        return {"status": "ok", "version": APP_VERSION}
+
+    @application.get("/health/ready", tags=["ops"])
+    def health_ready(request: Request) -> dict:
+        """
+        Readiness probe — verifies the database and scheduler are operational.
+
+        A degraded status means a component is not ready (e.g. DB unreachable
+        or the scheduler has not started), which is useful for orchestration
+        systems that gate traffic on readiness.
+
+        Args:
+            request: The incoming FastAPI request (for app.state).
+
+        Returns:
+            A dict with overall "status" plus per-component flags and version.
+        """
+        db_ok = True
+        try:
+            # NOTE: A trivial read proves the SQLite file is reachable and
+            # queryable; any DB error means the app cannot operate.
+            from sqlmodel import Session, text
+
+            from db.database import engine
+            with Session(engine) as session:
+                session.exec(text("SELECT 1"))
+        except Exception:
+            db_ok = False
+
+        scheduler = getattr(request.app.state, "scheduler", None)
+        scheduler_ok = scheduler is not None and getattr(scheduler, "running", False)
+
+        ready = db_ok and scheduler_ok
+        return {
+            "status": "ok" if ready else "degraded",
+            "database": db_ok,
+            "scheduler": scheduler_ok,
+            "version": APP_VERSION,
+        }
+
+    # ---------------------------------------------------------------------------
+    # Prometheus metrics endpoint — scraped by monitoring systems
+    # ---------------------------------------------------------------------------
+
+    @application.get("/metrics", tags=["ops"])
+    def metrics() -> PlainTextResponse:
+        """
+        Exposes Prometheus metrics in the text exposition format.
+
+        Returns:
+            A PlainTextResponse with the rendered metric payload.
+        """
+        from metrics import CONTENT_TYPE_LATEST, render_metrics
+
+        return PlainTextResponse(render_metrics(), media_type=CONTENT_TYPE_LATEST)
 
     # ---------------------------------------------------------------------------
     # Custom exception handlers — return JSON for domain errors

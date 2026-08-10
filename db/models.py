@@ -12,6 +12,8 @@ from typing import Optional
 
 from sqlmodel import Field, SQLModel
 
+from utils import utcnow_naive
+
 # ---------------------------------------------------------------------------
 # AppConfig — single-row application configuration table
 # ---------------------------------------------------------------------------
@@ -42,9 +44,6 @@ class AppConfig(SQLModel, table=True):
     # Background DDNS check interval in seconds
     interval: int = Field(default=300)
 
-    # JSON-encoded UI section visibility state
-    ui_state_json: str = Field(default='{"settings": true, "all_records": true, "logs": true}')
-
     # Whether Kubernetes Ingress discovery is enabled (off by default)
     k8s_enabled: bool = Field(default=False)
 
@@ -62,6 +61,9 @@ class AppConfig(SQLModel, table=True):
 
     # Whether UniFi internal DNS management is enabled (off by default)
     unifi_enabled: bool = Field(default=False)
+
+    # How many days of LogEntry rows to keep (trimmed by log_cleanup.py)
+    log_retention_days: int = Field(default=7)
 
 
 # ---------------------------------------------------------------------------
@@ -153,8 +155,41 @@ class LogEntry(SQLModel, table=True):
 
     id: Optional[int] = Field(default=None, primary_key=True)
 
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    # NOTE: Indexed because the log panel orders by timestamp DESC and the
+    # table grows over time — see db/database.py migration for existing DBs.
+    timestamp: datetime = Field(default_factory=utcnow_naive, index=True)
     level: str = Field(default="INFO")
 
     # The human-readable log message; may include DNS record names or IPs
     message: str = Field(default="")
+
+
+# ---------------------------------------------------------------------------
+# IpHistoryEntry — per-record IP change history (timeline)
+# ---------------------------------------------------------------------------
+
+
+class IpHistoryEntry(SQLModel, table=True):
+    """
+    Records every observed IP change for a managed DNS record.
+
+    One row per IP transition. Written by HistoryRepository when a record is
+    created or updated (by the scheduler or a manual action), read back by the
+    UI to render the per-record timeline. This is intentionally append-only —
+    rows are never updated, only inserted (and pruned by retention if ever
+    needed).
+    """
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    # Fully-qualified DNS name this change belongs to
+    record_name: str = Field(index=True)
+
+    # The IP the record was set to (e.g. "1.2.3.4")
+    ip: str = Field(default="")
+
+    # Who triggered the change: "scheduler" | "manual" | "create"
+    source: str = Field(default="scheduler")
+
+    # When the change happened (naive UTC)
+    timestamp: datetime = Field(default_factory=utcnow_naive, index=True)

@@ -9,6 +9,7 @@
     <span class="card-title">Activity Log</span>
     <div class="flex items-center gap-2">
       <span class="htmx-indicator text-xs text-muted">refreshing…</span>
+      <a href="/api/logs/export" class="btn btn-ghost btn-sm">Export CSV</a>
       <form hx-post="/clear-logs"
             hx-target="#log-content"
             hx-swap="innerHTML"
@@ -19,14 +20,39 @@
     </div>
   </div>
   <div class="card-body" style="padding: 0.75rem;">
-    <div x-data="{ follow: true }"
+    <div x-data="{ follow: true, level: {{ level|tojson }} }"
          x-init="$el.addEventListener('htmx:afterSwap', () => {
            if (follow) {
              const log = $el.querySelector('.log-viewer');
              if (log) $nextTick(() => { log.scrollTop = log.scrollHeight; });
            }
          })">
-      <div style="display:flex; align-items:center; justify-content:flex-end; margin-bottom:0.4rem;">
+      <div style="display:flex; align-items:center; justify-content:flex-end; gap:0.5rem; margin-bottom:0.4rem;">
+        {# Hidden input lets the SSE-driven refresh of #log-content keep the active filter #}
+        <input type="hidden" name="level" :value="level">
+        {# Level filter — each button fires its own HTMX fetch; Alpine tracks the active level #}
+        <div style="display:flex; gap:0.25rem;">
+          <button class="btn btn-ghost btn-sm"
+                  hx-get="/api/logs/recent?level="
+                  hx-target="#log-content" hx-swap="innerHTML"
+                  :style="level === '' ? 'font-weight:700; color:#0284c7;' : ''"
+                  @click="level = ''">All</button>
+          <button class="btn btn-ghost btn-sm"
+                  hx-get="/api/logs/recent?level=INFO"
+                  hx-target="#log-content" hx-swap="innerHTML"
+                  :style="level === 'INFO' ? 'font-weight:700; color:#0284c7;' : ''"
+                  @click="level = 'INFO'">Info</button>
+          <button class="btn btn-ghost btn-sm"
+                  hx-get="/api/logs/recent?level=WARNING"
+                  hx-target="#log-content" hx-swap="innerHTML"
+                  :style="level === 'WARNING' ? 'font-weight:700; color:#0284c7;' : ''"
+                  @click="level = 'WARNING'">Warnings</button>
+          <button class="btn btn-ghost btn-sm"
+                  hx-get="/api/logs/recent?level=ERROR"
+                  hx-target="#log-content" hx-swap="innerHTML"
+                  :style="level === 'ERROR' ? 'font-weight:700; color:#0284c7;' : ''"
+                  @click="level = 'ERROR'">Errors</button>
+        </div>
         <button class="btn btn-ghost btn-sm"
                 @click="follow = !follow"
                 x-text="follow ? 'Following \u25bc' : 'Paused \u23f8'">Following &#9660;</button>
@@ -34,6 +60,7 @@
       <div id="log-content"
            hx-get="/api/logs/recent"
            hx-trigger="load, sse:log_appended"
+           hx-include="[name='level']"
            hx-swap="innerHTML">
         {% include "partials/log_panel.html" %}
       </div>

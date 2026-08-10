@@ -1,0 +1,22 @@
+{# Per-record IP change history timeline fragment.
+   Loaded on demand into the config modal via:
+   hx-get="/api/records/{{ record_name }}/history" #}
+{% if entries %}
+<div style="font-size:0.8rem;">
+  {% for e in entries %}
+  <div style="display:flex; align-items:flex-start; gap:0.55rem; padding:0.35rem 0; border-bottom:1px solid #f1f5f9;">
+    <span style="width:8px; height:8px; border-radius:50%; background:#0284c7;
+                 margin-top:0.4rem; flex-shrink:0;"></span>
+    <div style="min-width:0;">
+      <div class="font-mono" style="font-weight:600; color:#1e293b; font-size:0.82rem;">{{ e.ip }}</div>
+      <div style="color:#64748b; font-size:0.72rem;">
+        {% if e.timestamp %}{{ e.timestamp.strftime('%Y-%m-%d %H:%M:%S') }}{% endif %}
+        &middot; {{ e.source }}
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div style="color:#94a3b8; font-size:0.8rem;">No IP changes recorded yet.</div>
+{% endif %}

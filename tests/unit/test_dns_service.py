@@ -28,15 +28,15 @@ def _make_dns_service(db_session, dns_provider, ip_service):
     return DnsService(dns_provider, ip_service, stats_service, log_service)
 
 
-def _mock_record(content="1.2.3.4"):
+def _mock_record(content="1.2.3.4", name="home.example.com", zone_id="zone123"):
     return DnsRecord(
         id="rec1",
-        name="home.example.com",
+        name=name,
         content=content,
         type="A",
         ttl=1,
         proxied=False,
-        zone_id="zone123",
+        zone_id=zone_id,
     )
 
 
@@ -411,3 +411,155 @@ async def test_run_check_cycle_create_failure_records_stat(db_session):
     stats = repo.get_by_name("home.example.com")
     assert stats is not None
     assert stats.failures == 1
+
+
+# ---------------------------------------------------------------------------
+# Batch commit behaviour
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_run_check_cycle_batches_commits(db_session):
+    """
+    With batch_commits=True the cycle must defer every log commit and flush
+    exactly once at the end.
+    """
+    ip_service = AsyncMock()
+    ip_service.get_public_ip.return_value = "1.2.3.4"
+
+    provider = AsyncMock()
+    provider.get_record.return_value = _mock_record(content="9.9.9.9")
+    provider.update_record.return_value = _mock_record(content="1.2.3.4")
+
+    log_service = MagicMock()
+    stats_service = MagicMock()
+    stats_service.get_for_record = AsyncMock(return_value=None)
+    stats_service.record_checked = AsyncMock()
+    stats_service.record_updated = AsyncMock()
+
+    service = DnsService(provider, ip_service, stats_service, log_service)
+    await service.run_check_cycle(
+        managed_records=["home.example.com"],
+        zones={"example.com": "zone123"},
+        batch_commits=True,
+    )
+
+    # Every log write during the cycle must have deferred its commit...
+    for call in log_service.log.call_args_list:
+        assert call.kwargs.get("commit") is False
+    # ...and exactly one flush happened at the end.
+    log_service.flush.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_run_check_cycle_commits_immediately_when_not_batched(db_session):
+    """
+    With batch_commits=False every write commits immediately and no flush
+    is issued (single-record callers must not defer persistence).
+    """
+    ip_service = AsyncMock()
+    ip_service.get_public_ip.return_value = "1.2.3.4"
+
+    provider = AsyncMock()
+    provider.get_record.return_value = _mock_record(content="1.2.3.4")
+
+    log_service = MagicMock()
+    stats_service = MagicMock()
+    stats_service.get_for_record = AsyncMock(return_value=None)
+    stats_service.record_checked = AsyncMock()
+
+    service = DnsService(provider, ip_service, stats_service, log_service)
+    await service.run_check_cycle(
+        managed_records=["home.example.com"],
+        zones={"example.com": "zone123"},
+        batch_commits=False,
+    )
+
+    for call in log_service.log.call_args_list:
+        assert call.kwargs.get("commit") is True
+    log_service.flush.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# IP change history + Prometheus metrics
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_run_check_cycle_records_history_and_metrics(db_session):
+    """
+    A cycle that updates a record must append to the IP history timeline and
+    bump the per-record Prometheus counters.
+    """
+    from metrics import ddns_checks_total, ddns_updates_total
+    from repositories.history_repository import HistoryRepository
+    from services.history_service import HistoryService
+
+    # Unique name keeps the global metric registry isolated from other tests.
+    name = "history-metrics-test.example.com"
+    ip_service = AsyncMock()
+    ip_service.get_public_ip.return_value = "1.2.3.4"
+
+    provider = AsyncMock()
+    provider.get_record.return_value = _mock_record(content="9.9.9.9", name=name)
+    provider.update_record.return_value = _mock_record(content="1.2.3.4", name=name)
+
+    stats_repo = StatsRepository(db_session)
+    stats_service = StatsService(stats_repo)
+    log_service = LogService(db_session)
+    history_service = HistoryService(HistoryRepository(db_session))
+    service = DnsService(
+        provider,
+        ip_service,
+        stats_service,
+        log_service,
+        history_service=history_service,
+    )
+
+    updates_before = ddns_updates_total.labels(name)._value.get()
+
+    await service.run_check_cycle(
+        managed_records=[name],
+        zones={"example.com": "zone123"},
+    )
+
+    history = history_service.get_history(name)
+    assert len(history) == 1
+    assert history[0].ip == "1.2.3.4"
+    assert history[0].source == "scheduler"
+    assert ddns_updates_total.labels(name)._value.get() == updates_before + 1
+    assert ddns_checks_total.labels(name)._value.get() >= 1
+
+
+@pytest.mark.asyncio
+async def test_manual_check_records_history_with_manual_source(db_session):
+    """check_record_now must record history with source='manual' on an update."""
+    from repositories.history_repository import HistoryRepository
+    from services.history_service import HistoryService
+
+    name = "history-manual-test.example.com"
+    ip_service = AsyncMock()
+    ip_service.get_public_ip.return_value = "1.2.3.4"
+
+    provider = AsyncMock()
+    provider.get_record.return_value = _mock_record(content="9.9.9.9", name=name)
+    provider.update_record.return_value = _mock_record(content="1.2.3.4", name=name)
+
+    stats_repo = StatsRepository(db_session)
+    stats_service = StatsService(stats_repo)
+    log_service = LogService(db_session)
+    history_service = HistoryService(HistoryRepository(db_session))
+    service = DnsService(
+        provider,
+        ip_service,
+        stats_service,
+        log_service,
+        history_service=history_service,
+    )
+
+    result = await service.check_record_now(name, None, {"example.com": "zone123"})
+
+    assert result == "updated"
+    history = history_service.get_history(name)
+    assert len(history) == 1
+    assert history[0].source == "manual"

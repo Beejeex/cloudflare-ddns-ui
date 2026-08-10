@@ -17,11 +17,13 @@ from cloudflare.dns_provider import DNSProvider
 from cloudflare.unifi_client import UnifiClient
 from db.database import get_session
 from repositories.config_repository import ConfigRepository
+from repositories.history_repository import HistoryRepository
 from repositories.record_config_repository import RecordConfigRepository
 from repositories.stats_repository import StatsRepository
 from services.broadcast_service import BroadcastService
 from services.config_service import ConfigService
 from services.dns_service import DnsService
+from services.history_service import HistoryService
 from services.ip_service import IpService
 from services.kubernetes_service import KubernetesService
 from services.log_service import LogService
@@ -126,6 +128,34 @@ def get_record_config_repo(
     return RecordConfigRepository(session)
 
 
+def get_history_repo(session: Session = Depends(get_session)) -> HistoryRepository:
+    """
+    Provides a HistoryRepository for the current request's DB session.
+
+    Args:
+        session: The DB session injected by get_session.
+
+    Returns:
+        A HistoryRepository instance.
+    """
+    return HistoryRepository(session)
+
+
+def get_history_service(
+    history_repo: HistoryRepository = Depends(get_history_repo),
+) -> HistoryService:
+    """
+    Provides a HistoryService backed by the current request's DB session.
+
+    Args:
+        history_repo: The repository injected by get_history_repo.
+
+    Returns:
+        A HistoryService instance.
+    """
+    return HistoryService(history_repo)
+
+
 # ---------------------------------------------------------------------------
 # Service providers
 # ---------------------------------------------------------------------------
@@ -196,6 +226,7 @@ def get_ip_service(
 
 
 async def get_dns_provider(
+    request: Request,
     config_service: ConfigService = Depends(get_config_service),
     http_client: httpx.AsyncClient = Depends(get_http_client),
 ) -> DNSProvider:
@@ -203,9 +234,11 @@ async def get_dns_provider(
     Provides a CloudflareClient initialised with the current API token.
 
     Loads the API token from config on every request so any token change
-    takes effect without a restart.
+    takes effect without a restart.  The client shares the app-wide listing
+    cache so the UI and scheduler do not re-fetch the same zones redundantly.
 
     Args:
+        request: The current FastAPI Request (injected automatically).
         config_service: Provides the current API token from the DB.
         http_client: The application-level httpx.AsyncClient.
 
@@ -213,7 +246,11 @@ async def get_dns_provider(
         A CloudflareClient instance satisfying the DNSProvider protocol.
     """
     api_token = await config_service.get_api_token()
-    return CloudflareClient(http_client=http_client, api_token=api_token)
+    return CloudflareClient(
+        http_client=http_client,
+        api_token=api_token,
+        cache=getattr(request.app.state, "listing_cache", None),
+    )
 
 
 def get_dns_service(
@@ -221,6 +258,7 @@ def get_dns_service(
     ip_service: IpService = Depends(get_ip_service),
     stats_service: StatsService = Depends(get_stats_service),
     log_service: LogService = Depends(get_log_service),
+    history_service: HistoryService = Depends(get_history_service),
 ) -> DnsService:
     """
     Provides a fully wired DnsService for the current request.
@@ -233,11 +271,18 @@ def get_dns_service(
         ip_service: Provides the current public IP.
         stats_service: Records update/failure stats.
         log_service: Writes UI-visible log entries.
+        history_service: Appends IP changes to the per-record timeline.
 
     Returns:
         A DnsService instance ready to use.
     """
-    return DnsService(dns_provider, ip_service, stats_service, log_service)
+    return DnsService(
+        dns_provider,
+        ip_service,
+        stats_service,
+        log_service,
+        history_service=history_service,
+    )
 
 
 async def get_kubernetes_service(
@@ -261,6 +306,7 @@ async def get_kubernetes_service(
 
 
 async def get_unifi_client(
+    request: Request,
     config_service: ConfigService = Depends(get_config_service),
     http_client: httpx.AsyncClient = Depends(get_unifi_http_client),
 ) -> UnifiClient:
@@ -268,9 +314,12 @@ async def get_unifi_client(
     Provides a UnifiClient initialised with the current host, API key, and site.
 
     The client's is_configured() returns False when no key is set,
-    allowing callers to skip UniFi calls gracefully.
+    allowing callers to skip UniFi calls gracefully.  The client shares the
+    app-wide listing cache so the UI and scheduler sync pass do not re-fetch
+    the same policies redundantly.
 
     Args:
+        request: The current FastAPI Request (injected automatically).
         config_service: Provides the UniFi config from the DB.
         http_client: The UniFi-specific httpx.AsyncClient (verify=False).
 
@@ -278,4 +327,9 @@ async def get_unifi_client(
         A UnifiClient instance.
     """
     host, api_key, _, _, _ = await config_service.get_unifi_config()
-    return UnifiClient(http_client=http_client, api_key=api_key, host=host or "localhost")
+    return UnifiClient(
+        http_client=http_client,
+        api_key=api_key,
+        host=host or "localhost",
+        cache=getattr(request.app.state, "listing_cache", None),
+    )

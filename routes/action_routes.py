@@ -14,8 +14,10 @@ import logging
 
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse
+from shared_templates import templates
 
 from dependencies import (
+    get_broadcaster,
     get_config_service,
     get_dns_service,
     get_log_service,
@@ -24,8 +26,11 @@ from dependencies import (
     get_unifi_client,
 )
 from exceptions import DnsProviderError, UnifiProviderError
+from presenters import build_record_row
 from repositories.record_config_repository import RecordConfigRepository
 from scheduler import reschedule
+from services.broadcast_service import BroadcastService
+from utils import mask_secret
 from services.config_service import ConfigService
 from services.dns_service import DnsService
 from services.log_service import LogService
@@ -35,7 +40,6 @@ from cloudflare.unifi_client import UnifiClient
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-from shared_templates import templates  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -50,6 +54,7 @@ async def update_config(
     zones: str = Form(...),
     refresh: int = Form(30),
     interval: int = Form(300),
+    log_retention_days: int = Form(7),
     k8s_enabled: bool = Form(False),
     unifi_host: str = Form(""),
     unifi_api_key: str = Form(""),
@@ -73,6 +78,7 @@ async def update_config(
         zones: JSON string of base-domain-to-zone-ID mapping.
         refresh: UI auto-refresh interval in seconds.
         interval: Background DDNS check interval in seconds.
+        log_retention_days: How many days of activity logs to keep.
         k8s_enabled: Whether Kubernetes Ingress discovery is enabled.
         unifi_host: Hostname or IP of the local UniFi Network Application.
         unifi_api_key: UniFi API key with DNS write access.
@@ -90,11 +96,24 @@ async def update_config(
         zones_dict = {}
         logger.warning("update-config: invalid zones JSON received.")
 
+    # Defense-in-depth: the settings form pre-fills masked placeholders instead
+    # of the real secrets.  If the submitted value is still the masked form of
+    # the stored value, keep the stored secret — never overwrite it with the
+    # masked display string.
+    stored_token = await config_service.get_api_token()
+    if api_token == mask_secret(stored_token):
+        api_token = stored_token
+
+    _unifi_cfg = await config_service.get_unifi_config()
+    if unifi_api_key == mask_secret(_unifi_cfg[1]):
+        unifi_api_key = _unifi_cfg[1]
+
     await config_service.update_credentials(
         api_token=api_token,
         zones=zones_dict,
         refresh=refresh,
         interval=interval,
+        log_retention_days=log_retention_days,
         k8s_enabled=k8s_enabled,
         unifi_host=unifi_host,
         unifi_api_key=unifi_api_key,
@@ -126,6 +145,90 @@ async def update_config(
 
 
 # ---------------------------------------------------------------------------
+# Bulk actions
+# ---------------------------------------------------------------------------
+
+
+@router.post("/bulk-set-cf", response_class=HTMLResponse)
+async def bulk_set_cf(
+    request: Request,
+    enabled: str = Form(default="true"),
+    config_service: ConfigService = Depends(get_config_service),
+    record_config_repo: RecordConfigRepository = Depends(get_record_config_repo),
+    log_service: LogService = Depends(get_log_service),
+    broadcaster: BroadcastService = Depends(get_broadcaster),
+) -> HTMLResponse:
+    """
+    Enables or disables Cloudflare DDNS for every managed record at once.
+
+    HTMX posts `enabled` ("true"/"false"); the action applies to all managed
+    records in a single DB transaction, logs the outcome, and broadcasts a
+    ``records_updated`` SSE event.  Returns an empty body — the dashboard's
+    afterRequest handler reloads the page (see reloadPaths in dashboard.html).
+
+    Args:
+        request: The incoming FastAPI request.
+        enabled: "true" to enable, anything else to disable.
+        config_service: Provides the managed record list.
+        record_config_repo: Applies the bulk flag to RecordConfig rows.
+        log_service: Writes a bulk-action log entry.
+        broadcaster: Pushes a records_updated SSE event to open tabs.
+
+    Returns:
+        An empty HTMLResponse (page reload is triggered client-side).
+    """
+    records = await config_service.get_managed_records()
+    flag = enabled == "true"
+    count = record_config_repo.set_cf_enabled_all(records, flag)
+    log_service.log(
+        f"Bulk action: Cloudflare DDNS {'enabled' if flag else 'disabled'} for {count} record(s).",
+        level="INFO",
+    )
+    broadcaster.publish("records_updated", "")
+    broadcaster.publish("log_appended", "{}")
+    return HTMLResponse(content="", status_code=200)
+
+
+@router.post("/bulk-set-unifi", response_class=HTMLResponse)
+async def bulk_set_unifi(
+    request: Request,
+    enabled: str = Form(default="true"),
+    config_service: ConfigService = Depends(get_config_service),
+    record_config_repo: RecordConfigRepository = Depends(get_record_config_repo),
+    log_service: LogService = Depends(get_log_service),
+    broadcaster: BroadcastService = Depends(get_broadcaster),
+) -> HTMLResponse:
+    """
+    Enables or disables UniFi DNS management for every managed record at once.
+
+    Disabling also clears each record's ``.local`` companion flag so the
+    scheduler's sync pass deletes those policies on the next cycle.  Returns
+    an empty body — the dashboard's afterRequest handler reloads the page.
+
+    Args:
+        request: The incoming FastAPI request.
+        enabled: "true" to enable, anything else to disable.
+        config_service: Provides the managed record list.
+        record_config_repo: Applies the bulk flag to RecordConfig rows.
+        log_service: Writes a bulk-action log entry.
+        broadcaster: Pushes a records_updated SSE event to open tabs.
+
+    Returns:
+        An empty HTMLResponse (page reload is triggered client-side).
+    """
+    records = await config_service.get_managed_records()
+    flag = enabled == "true"
+    count = record_config_repo.set_unifi_enabled_all(records, flag)
+    log_service.log(
+        f"Bulk action: UniFi DNS {'enabled' if flag else 'disabled'} for {count} record(s).",
+        level="INFO",
+    )
+    broadcaster.publish("records_updated", "")
+    broadcaster.publish("log_appended", "{}")
+    return HTMLResponse(content="", status_code=200)
+
+
+# ---------------------------------------------------------------------------
 # Managed records
 # ---------------------------------------------------------------------------
 
@@ -150,31 +253,10 @@ def _build_record_rows(
     Returns:
         A list of dicts matching the template's expected record shape.
     """
-    rows = []
-    for r in records:
-        s = stats_by_name.get(r)
-        cfg = cfgs.get(r)
-        rows.append({
-            "name": r,
-            "cf_record_id": None,       # NOTE: not available without a live CF call
-            "dns_ip": "—",
-            "is_up_to_date": None,
-            "updates": s.updates if s else 0,
-            "failures": s.failures if s else 0,
-            "last_checked": s.last_checked.isoformat() if s and s.last_checked else None,
-            "last_updated": s.last_updated.isoformat() if s and s.last_updated else None,
-            "unifi_ip": None,
-            "unifi_local_ip": None,
-            "unifi_record_id": None,
-            "cfg_cf_enabled": cfg.cf_enabled if cfg else True,
-            "cfg_ip_mode": cfg.ip_mode if cfg else "dynamic",
-            "cfg_static_ip": cfg.static_ip if cfg else "",
-            "cfg_unifi_enabled": cfg.unifi_enabled if cfg else False,
-            "cfg_unifi_static_ip": cfg.unifi_static_ip if cfg else "",
-            "cfg_unifi_local_enabled": cfg.unifi_local_enabled if cfg else False,
-            "cfg_unifi_local_static_ip": cfg.unifi_local_static_ip if cfg else "",
-        })
-    return rows
+    return [
+        build_record_row(r, stats=stats_by_name.get(r), cfg=cfgs.get(r))
+        for r in records
+    ]
 
 
 @router.post("/add-to-managed", response_class=HTMLResponse)
@@ -674,3 +756,51 @@ async def create_record(
     # /create-record, so injecting any table here would flash inside #create-record-status
     # before the reload. Empty body is sufficient to trigger the reload path.
     return HTMLResponse("")
+
+
+# ---------------------------------------------------------------------------
+# Per-record manual check
+# ---------------------------------------------------------------------------
+
+
+@router.post("/check-record", response_class=HTMLResponse)
+async def check_record(
+    request: Request,
+    record_name: str = Form(...),
+    config_service: ConfigService = Depends(get_config_service),
+    dns_service: DnsService = Depends(get_dns_service),
+    record_config_repo: RecordConfigRepository = Depends(get_record_config_repo),
+    log_service: LogService = Depends(get_log_service),
+) -> HTMLResponse:
+    """
+    Runs an immediate DDNS check for a single record and returns a status badge.
+
+    Triggered by the "Check now" action on a managed record card. HTMX swaps
+    the returned badge into the card's per-record status span.
+
+    Args:
+        request: The incoming FastAPI request.
+        record_name: The FQDN to check.
+        config_service: Provides the configured zones.
+        dns_service: Runs the per-record check.
+        record_config_repo: Provides the record's per-record settings.
+        log_service: Writes a UI log entry on completion.
+
+    Returns:
+        An HTMLResponse containing a small status badge fragment.
+    """
+    zones = await config_service.get_zones()
+    cfg = record_config_repo.get(record_name)
+    result = await dns_service.check_record_now(record_name, cfg, zones)
+    log_service.log(f"Manual check for '{record_name}': {result}.", level="INFO")
+
+    labels = {
+        "updated": ("\u2713 Updated", "#16a34a"),
+        "unchanged": ("\u2713 Up to date", "#16a34a"),
+        "skipped": ("Skipped", "#94a3b8"),
+        "failed": ("\u26a0 Failed", "#dc2626"),
+    }
+    text, color = labels.get(result, ("Done", "#0284c7"))
+    return HTMLResponse(
+        content=f'<span class="badge" style="color:{color};">{text}</span>'
+    )

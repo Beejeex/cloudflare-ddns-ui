@@ -73,13 +73,6 @@ def _run_migrations() -> None:
         existing = {
             row[1] for row in conn.exec_driver_sql("PRAGMA table_info(appconfig)")
         }
-        # NOTE: Keep kubeconfig_path migration so existing databases that already
-        # have the column do not fail. No-op if the column is already present.
-        if "kubeconfig_path" not in existing:
-            conn.exec_driver_sql(
-                "ALTER TABLE appconfig ADD COLUMN kubeconfig_path TEXT NOT NULL DEFAULT ''"
-            )
-            logger.info("Migration: added 'kubeconfig_path' column to appconfig table.")
         if "k8s_enabled" not in existing:
             conn.exec_driver_sql(
                 "ALTER TABLE appconfig ADD COLUMN k8s_enabled INTEGER NOT NULL DEFAULT 0"
@@ -130,6 +123,20 @@ def _run_migrations() -> None:
                 "ALTER TABLE recordconfig ADD COLUMN unifi_local_static_ip TEXT NOT NULL DEFAULT ''"
             )
             logger.info("Migration: added 'unifi_local_static_ip' column to recordconfig table.")
+
+        # --- appconfig table migrations (log retention setting) ---
+        if "log_retention_days" not in existing:
+            conn.exec_driver_sql(
+                "ALTER TABLE appconfig ADD COLUMN log_retention_days INTEGER NOT NULL DEFAULT 7"
+            )
+            logger.info("Migration: added 'log_retention_days' column to appconfig table.")
+
+        # --- index for fast log tail queries on existing databases ---
+        # NOTE: The SQLModel table definition has index=True on timestamp, but
+        # create_all() does not alter existing tables, so create the index here.
+        conn.exec_driver_sql(
+            "CREATE INDEX IF NOT EXISTS ix_logentry_timestamp ON logentry (timestamp)"
+        )
 
         conn.commit()
 

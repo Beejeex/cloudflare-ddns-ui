@@ -137,6 +137,126 @@ async def test_list_records_returns_all_records(mock_http):
     assert all(isinstance(r, DnsRecord) for r in result)
 
 
+@pytest.mark.asyncio
+async def test_list_records_paginates_across_pages(mock_http):
+    """list_records must follow result_info.total_pages to fetch every A-record."""
+    page1 = {
+        "success": True,
+        "result": [_record_dict(id="r1", name="a.example.com")],
+        "result_info": {"page": 1, "per_page": 100, "count": 1, "total_count": 2, "total_pages": 2},
+        "errors": [],
+    }
+    page2 = {
+        "success": True,
+        "result": [_record_dict(id="r2", name="b.example.com")],
+        "result_info": {"page": 2, "per_page": 100, "count": 1, "total_count": 2, "total_pages": 2},
+        "errors": [],
+    }
+    route = mock_http.get(f"{_BASE}/zones/{_ZONE}/dns_records").mock(
+        side_effect=[httpx.Response(200, json=page1), httpx.Response(200, json=page2)]
+    )
+    async with httpx.AsyncClient() as client:
+        cf = CloudflareClient(client, _TOKEN)
+        result = await cf.list_records(_ZONE)
+
+    assert len(result) == 2
+    assert {r.id for r in result} == {"r1", "r2"}
+    pages = [c.request.url.params.get("page") for c in route.calls]
+    assert pages == ["1", "2"]
+
+
+@pytest.mark.asyncio
+async def test_list_records_single_page_when_result_info_missing(mock_http):
+    """list_records must not loop when the API omits result_info (single page)."""
+    records = [_record_dict(id="r1", name="a.example.com"), _record_dict(id="r2", name="b.example.com")]
+    route = mock_http.get(f"{_BASE}/zones/{_ZONE}/dns_records").mock(
+        return_value=httpx.Response(200, json=_cf_response(records))
+    )
+    async with httpx.AsyncClient() as client:
+        cf = CloudflareClient(client, _TOKEN)
+        result = await cf.list_records(_ZONE)
+
+    assert len(result) == 2
+    assert len(route.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_list_records_retries_on_transient_5xx(mock_http):
+    """A transient 5xx from list_records must be retried before succeeding."""
+    records = [_record_dict(id="r1", name="a.example.com")]
+    route = mock_http.get(f"{_BASE}/zones/{_ZONE}/dns_records").mock(
+        side_effect=[
+            httpx.Response(500, json={"success": False, "errors": [{"message": "boom"}], "result": []}),
+            httpx.Response(200, json=_cf_response(records)),
+        ]
+    )
+    async with httpx.AsyncClient() as client:
+        cf = CloudflareClient(client, _TOKEN)
+        result = await cf.list_records(_ZONE)
+
+    assert len(result) == 1
+    assert len(route.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_list_records_does_not_retry_on_4xx(mock_http):
+    """A 4xx response must fail immediately without retries."""
+    route = mock_http.get(f"{_BASE}/zones/{_ZONE}/dns_records").mock(
+        return_value=httpx.Response(403, json={"errors": ["forbidden"]})
+    )
+    async with httpx.AsyncClient() as client:
+        cf = CloudflareClient(client, _TOKEN)
+        with pytest.raises(DnsProviderError):
+            await cf.list_records(_ZONE)
+    assert len(route.calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# list_records — shared listing cache
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_records_served_from_cache(mock_http):
+    """A cached zone listing must skip the network call on repeat reads."""
+    records = [_record_dict(id="r1", name="a.example.com")]
+    route = mock_http.get(f"{_BASE}/zones/{_ZONE}/dns_records").mock(
+        return_value=httpx.Response(200, json=_cf_response(records))
+    )
+    cache: dict = {}
+    async with httpx.AsyncClient() as client:
+        cf = CloudflareClient(client, _TOKEN, cache=cache)
+        first = await cf.list_records(_ZONE)
+        second = await cf.list_records(_ZONE)
+
+    assert len(first) == 1 and len(second) == 1
+    assert len(route.calls) == 1
+    assert f"list_records:{_ZONE}" in cache
+
+
+@pytest.mark.asyncio
+async def test_update_record_invalidates_zone_listing(mock_http):
+    """A mutation must drop the cached zone listing so the next read re-fetches."""
+    existing = DnsRecord(id="rec1", name="home.example.com", content="1.1.1.1",
+                         type="A", ttl=1, proxied=False, zone_id=_ZONE)
+    records = [_record_dict(id="rec1", name="home.example.com", content="9.9.9.9")]
+    mock_http.put(f"{_BASE}/zones/{_ZONE}/dns_records/rec1").mock(
+        return_value=httpx.Response(200, json=_cf_response(records[0]))
+    )
+    list_route = mock_http.get(f"{_BASE}/zones/{_ZONE}/dns_records").mock(
+        return_value=httpx.Response(200, json=_cf_response(records))
+    )
+    cache: dict = {}
+    async with httpx.AsyncClient() as client:
+        cf = CloudflareClient(client, _TOKEN, cache=cache)
+        await cf.list_records(_ZONE)          # populates cache
+        await cf.update_record(_ZONE, existing, "9.9.9.9")  # invalidates
+        await cf.list_records(_ZONE)          # must re-fetch
+
+    assert len(list_route.calls) == 2
+    assert f"list_records:{_ZONE}" in cache
+
+
 # ---------------------------------------------------------------------------
 # create_record
 # ---------------------------------------------------------------------------
@@ -234,3 +354,48 @@ async def test_delete_record_raises_on_network_error(mock_http):
         cf = CloudflareClient(client, _TOKEN)
         with pytest.raises(DnsProviderError, match="connection reset"):
             await cf.delete_record(_ZONE, "rec1")
+
+
+# ---------------------------------------------------------------------------
+# verify_token / list_zones (Cloudflare-specific helpers)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_verify_token_returns_true_when_active(mock_http):
+    """verify_token returns True when the token status is active."""
+    mock_http.get(f"{_BASE}/user/tokens/verify").mock(
+        return_value=httpx.Response(200, json=_cf_response({"id": "tok", "status": "active"}))
+    )
+    async with httpx.AsyncClient() as client:
+        cf = CloudflareClient(client, _TOKEN)
+        assert await cf.verify_token() is True
+
+
+@pytest.mark.asyncio
+async def test_verify_token_returns_false_when_inactive(mock_http):
+    """verify_token returns False when the token is not active."""
+    mock_http.get(f"{_BASE}/user/tokens/verify").mock(
+        return_value=httpx.Response(200, json=_cf_response({"id": "tok", "status": "disabled"}))
+    )
+    async with httpx.AsyncClient() as client:
+        cf = CloudflareClient(client, _TOKEN)
+        assert await cf.verify_token() is False
+
+
+@pytest.mark.asyncio
+async def test_list_zones_returns_zones(mock_http):
+    """list_zones returns name/id dicts for every zone."""
+    mock_http.get(f"{_BASE}/zones").mock(
+        return_value=httpx.Response(200, json=_cf_response([
+            {"name": "example.com", "id": "zone1"},
+            {"name": "other.net", "id": "zone2"},
+        ]))
+    )
+    async with httpx.AsyncClient() as client:
+        cf = CloudflareClient(client, _TOKEN)
+        zones = await cf.list_zones()
+    assert zones == [
+        {"name": "example.com", "id": "zone1"},
+        {"name": "other.net", "id": "zone2"},
+    ]
